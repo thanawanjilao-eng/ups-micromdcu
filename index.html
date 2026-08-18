@@ -1,0 +1,1489 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ระบบบริหารจัดการ UPS หลายห้องปฏิบัติการ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<style>
+  :root{
+    --bg:#F7FAF7; --surface:#FFFFFF; --surface-2:#EEF6EE; --ink:#1B2A1E; --ink-soft:#5E6E5F;
+    --line:#DCEBDD; --brand:#2F7D4F; --brand-dark:#1F5C38; --gold:#7CB342;
+    --red:#C6444B; --red-bg:#FCEBEC; --yellow:#B8863A; --yellow-bg:#FBF3E3; --green:#2F7D4F; --green-bg:#E5F3E8;
+    --mono:'JetBrains Mono',monospace; --sans:'Sarabun',sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{font-family:var(--sans);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;}
+  ::selection{background:var(--gold);color:#fff;}
+
+  .shell{display:flex;min-height:100vh;}
+  .sidebar{width:246px;flex-shrink:0;background:var(--brand-dark);color:#EAF2F4;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto;}
+  .brand{padding:20px 20px 14px;border-bottom:1px solid rgba(255,255,255,.08);}
+  .brand .eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);margin:0 0 4px;}
+  .brand h1{font-size:17px;margin:0;font-weight:600;line-height:1.3;}
+  .brand .sub{font-size:11.5px;color:#9FB6BE;margin-top:4px;}
+
+  .lab-switch{padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.08);}
+  .lab-switch label{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:#9FB6BE;display:block;margin-bottom:6px;}
+  .lab-switch select{width:100%;padding:8px 9px;border-radius:7px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);color:#EAF2F4;font-family:var(--sans);font-size:13px;}
+  .lab-switch select option{color:#16252C;}
+
+  nav{padding:12px 10px;flex:0 0 auto;}
+  .nav-btn{width:100%;text-align:right;background:none;border:none;color:#CFE1E6;font-family:var(--sans);font-size:14.5px;padding:10px 14px;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:3px;transition:background .15s ease,color .15s ease;}
+  .nav-btn .lbl{display:flex;align-items:center;gap:10px;}
+  .nav-btn:hover{background:rgba(255,255,255,.06);color:#fff;}
+  .nav-btn.active{background:var(--gold);color:#2A2107;font-weight:600;}
+  .nav-badge{font-family:var(--mono);font-size:11px;background:var(--red);color:#fff;border-radius:20px;padding:1px 8px;min-width:20px;text-align:center;}
+  .nav-btn.active .nav-badge{background:#2A2107;color:var(--gold);}
+
+  .auth-panel{margin-top:auto;padding:14px 16px 18px;border-top:1px solid rgba(255,255,255,.08);font-size:12px;color:#AFC5CB;}
+  .auth-role{font-size:12.5px;color:#EAF2F4;margin-bottom:8px;display:flex;align-items:center;gap:6px;}
+  .auth-role .role-dot{width:7px;height:7px;border-radius:50%;background:var(--gold);}
+  .auth-btn{width:100%;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);color:#EAF2F4;padding:8px 10px;border-radius:7px;font-family:var(--sans);font-size:12.5px;cursor:pointer;}
+  .auth-btn:hover{background:rgba(255,255,255,.16);}
+
+  .main{flex:1;min-width:0;padding:28px 34px 60px;}
+  .page-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:22px;flex-wrap:wrap;gap:12px;}
+  .page-head h2{font-size:24px;margin:0 0 4px;font-weight:600;}
+  .page-head p{margin:0;color:var(--ink-soft);font-size:14px;}
+
+  .btn{font-family:var(--sans);font-size:14px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:9px 16px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:all .15s ease;}
+  .btn:hover{border-color:var(--brand);color:var(--brand);}
+  .btn-primary{background:var(--brand);color:#fff;border-color:var(--brand);}
+  .btn-primary:hover{background:var(--brand-dark);color:#fff;}
+  .btn-gold{background:var(--gold);color:#2A2107;border-color:var(--gold);font-weight:600;}
+  .btn-gold:hover{filter:brightness(1.05);color:#2A2107;}
+  .btn-danger{color:var(--red);}
+  .btn-danger:hover{border-color:var(--red);background:var(--red-bg);}
+  .btn-sm{padding:6px 11px;font-size:12.5px;border-radius:6px;}
+  .btn:disabled{opacity:.45;cursor:not-allowed;}
+
+  .badge-view{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft);background:var(--surface-2);border:1px solid var(--line);padding:4px 10px;border-radius:20px;}
+
+  .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px;}
+  .kpi{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;position:relative;overflow:hidden;}
+  .kpi::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--kc,var(--brand));}
+  .kpi .num{font-family:var(--mono);font-size:28px;font-weight:600;line-height:1;}
+  .kpi .lbl{font-size:12.5px;color:var(--ink-soft);margin-top:6px;}
+
+  .map-layout{display:grid;grid-template-columns:1fr 300px;gap:16px;align-items:start;}
+  .map-wrap{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;}
+  .map-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;flex-wrap:wrap;}
+  .map-toolbar .legend{display:flex;gap:14px;font-size:12.5px;color:var(--ink-soft);}
+  .legend span{display:inline-flex;align-items:center;gap:5px;}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;}
+  .map-canvas{position:relative;width:100%;aspect-ratio:16/10;border-radius:10px;overflow:hidden;background:linear-gradient(rgba(11,79,108,.06) 1px, transparent 1px),linear-gradient(90deg, rgba(11,79,108,.06) 1px, transparent 1px),var(--surface-2);background-size:5% 5%;border:1px dashed var(--line);background-position:center;background-repeat:no-repeat,no-repeat,no-repeat;}
+  .map-canvas.has-bg{background-size:5% 5%, 5% 5%, cover;}
+  .map-empty-hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--ink-soft);font-size:13px;text-align:center;padding:20px;pointer-events:none;}
+  .pin{position:absolute;width:22px;height:22px;border-radius:50% 50% 50% 0;transform:translate(-50%,-100%) rotate(-45deg);border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35);cursor:pointer;display:flex;align-items:center;justify-content:center;}
+  .pin.draggable{cursor:grab;}
+  .pin.draggable:active{cursor:grabbing;}
+  .pin::after{content:'';width:7px;height:7px;background:#fff;border-radius:50%;transform:rotate(45deg);}
+  .pin.selected{outline:2px solid var(--gold);outline-offset:2px;}
+  .pin-tag{position:absolute;top:-22px;left:50%;transform:translateX(-50%) rotate(45deg);font-family:var(--mono);font-size:10px;background:var(--brand-dark);color:#fff;padding:1px 5px;border-radius:4px;white-space:nowrap;opacity:0;transition:opacity .12s;pointer-events:none;}
+  .pin:hover .pin-tag{opacity:1;}
+
+  .detail-card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px;min-height:200px;}
+  .detail-card h3{margin:0 0 2px;font-size:16px;font-family:var(--mono);}
+  .detail-card .risk-chip{margin:6px 0 12px;}
+  .detail-row{display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-bottom:1px dashed var(--line);gap:10px;}
+  .detail-row .k{color:var(--ink-soft);flex-shrink:0;}
+  .detail-row .v{font-weight:500;text-align:right;}
+  .detail-empty{color:var(--ink-soft);font-size:13.5px;text-align:center;padding:50px 10px;}
+
+  .risk-chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 10px;border-radius:20px;}
+  .risk-red{background:var(--red-bg);color:var(--red);}
+  .risk-yellow{background:var(--yellow-bg);color:var(--yellow);}
+  .risk-green{background:var(--green-bg);color:var(--green);}
+
+  .lab-tally{width:100%;border-collapse:collapse;font-size:13.5px;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;}
+  .lab-tally th{background:var(--surface-2);color:var(--ink-soft);font-size:11px;text-transform:uppercase;padding:10px 12px;text-align:right;}
+  .lab-tally td{padding:10px 12px;border-top:1px solid var(--line);text-align:right;}
+  .lab-tally td:first-child,.lab-tally th:first-child{text-align:right;}
+
+  .table-wrap{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:auto;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th{text-align:right;background:var(--surface-2);color:var(--ink-soft);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;position:sticky;top:0;}
+  th:first-child,td:first-child{text-align:center;}
+  td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap;}
+  tr:last-child td{border-bottom:none;}
+  tr:hover td{background:#FAFCFD;}
+  .mono{font-family:var(--mono);font-size:12px;}
+  .actions-cell{display:flex;gap:6px;}
+  .empty-state{padding:50px 20px;text-align:center;color:var(--ink-soft);}
+  .empty-state .big{font-size:32px;margin-bottom:8px;}
+  .qr-thumb{width:44px;height:44px;background:#fff;border:1px solid var(--line);border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;overflow:hidden;}
+  .table-toolbar{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line);gap:10px;flex-wrap:wrap;}
+  .table-toolbar .left{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-soft);}
+
+  .alert-group{margin-bottom:22px;}
+  .alert-group h4{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);margin:0 0 10px;}
+  .alert-card{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--kc,var(--brand));border-radius:10px;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:10px;flex-wrap:wrap;}
+  .alert-card .info b{font-family:var(--mono);}
+  .alert-card .info .msg{font-size:13px;color:var(--ink-soft);margin-top:3px;}
+  .alert-card .info .msg strong{color:var(--ink);}
+  .ack-tag{font-size:11.5px;font-family:var(--mono);padding:2px 8px;border-radius:20px;background:var(--green-bg);color:var(--green);}
+  .alert-actions{display:flex;gap:8px;flex-shrink:0;}
+
+  .callout{background:#FFF9EC;border:1px solid #EEDBA0;border-radius:10px;padding:13px 16px;font-size:13px;color:#6B550F;margin-bottom:20px;line-height:1.65;}
+  .callout b{color:#4A3A08;}
+  .callout.blue{background:#EAF3F6;border-color:#BFD9E2;color:#0B4F6C;}
+  .callout.blue b{color:var(--brand-dark);}
+  .callout.red{background:var(--red-bg);border-color:#EAC0C3;color:#7A2126;}
+  .callout.red b{color:#5C1116;}
+
+  .modal-bg{position:fixed;inset:0;background:rgba(11,25,30,.5);display:none;align-items:flex-start;justify-content:center;z-index:50;padding:40px 16px;overflow-y:auto;}
+  .modal-bg.open{display:flex;}
+  .modal{background:var(--surface);border-radius:14px;width:100%;max-width:760px;padding:26px 28px 24px;box-shadow:0 20px 60px rgba(0,0,0,.25);}
+  .modal.narrow{max-width:400px;}
+  .modal h3{margin:0 0 4px;font-size:19px;}
+  .modal .modal-sub{font-size:12.5px;color:var(--ink-soft);margin:0 0 16px;}
+  .form-section-title{font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--brand);font-weight:600;margin:16px 0 8px;}
+  .form-section-title:first-child{margin-top:0;}
+  .form-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px 14px;}
+  .form-field{display:flex;flex-direction:column;gap:5px;}
+  .form-field.full{grid-column:1/-1;}
+  .form-field.span2{grid-column:span 2;}
+  .form-field label{font-size:12px;color:var(--ink-soft);font-weight:500;}
+  .form-field input,.form-field select,.form-field textarea{font-family:var(--sans);font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);width:100%;}
+  .form-field input:focus,.form-field select:focus,.form-field textarea:focus{outline:2px solid var(--brand);outline-offset:1px;background:#fff;}
+  .modal-foot{display:flex;justify-content:flex-end;gap:9px;margin-top:20px;}
+  .helptext{font-size:11.5px;color:var(--ink-soft);margin-top:2px;}
+  .inline-btn{font-size:11px;color:var(--brand);background:none;border:none;cursor:pointer;text-decoration:underline;padding:0;}
+  .ma-checklist{display:flex;flex-direction:column;gap:6px;margin-bottom:6px;}
+  .ma-check-row{display:grid;grid-template-columns:1fr 130px 1fr;gap:10px;align-items:center;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);}
+  .ma-check-row.is-fail{border-color:var(--red);background:var(--red-bg);}
+  .ma-check-label{font-size:12.5px;line-height:1.4;}
+  .ma-check-select{font-family:var(--sans);font-size:12.5px;padding:6px 7px;border:1px solid var(--line);border-radius:6px;background:#fff;}
+  .ma-check-reason{font-family:var(--sans);font-size:12.5px;padding:6px 9px;border:1px solid var(--line);border-radius:6px;width:100%;}
+  @media(max-width:700px){ .ma-check-row{grid-template-columns:1fr;} }
+
+  .settings-card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:16px;}
+  .settings-card h4{margin:0 0 6px;font-size:15px;}
+  .settings-card p{margin:0 0 12px;color:var(--ink-soft);font-size:13px;}
+  .file-drop{border:1.5px dashed var(--line);border-radius:10px;padding:20px;text-align:center;font-size:13px;color:var(--ink-soft);cursor:pointer;}
+  .file-drop:hover{border-color:var(--brand);color:var(--brand);}
+  .lab-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px dashed var(--line);flex-wrap:wrap;}
+  .lab-row:last-child{border-bottom:none;}
+  .lab-row input[type=text]{flex:1;min-width:180px;padding:7px 10px;border:1px solid var(--line);border-radius:6px;font-family:var(--sans);}
+  .lab-row .lab-id{font-family:var(--mono);font-size:11px;color:var(--ink-soft);width:52px;flex-shrink:0;}
+
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(10px);background:var(--brand-dark);color:#fff;padding:11px 20px;border-radius:9px;font-size:13.5px;opacity:0;pointer-events:none;transition:all .25s ease;z-index:80;box-shadow:0 8px 24px rgba(0,0,0,.25);max-width:80vw;text-align:center;}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+
+  .qr-print-area{text-align:center;padding:10px 0;}
+  .qr-print-area .qr-box{display:inline-flex;flex-direction:column;align-items:center;gap:6px;border:1px solid var(--line);border-radius:10px;padding:16px 20px;margin:6px;}
+  .qr-print-area .qr-box b{font-family:var(--mono);font-size:14px;}
+  .qr-print-area .qr-box span{font-size:11px;color:var(--ink-soft);}
+  #qrPrintSheet{display:none;}
+
+  @media print{
+    body *{visibility:hidden;}
+    #qrPrintSheet, #qrPrintSheet *{visibility:visible;}
+    #qrPrintSheet{display:block !important;position:absolute;left:0;top:0;width:100%;}
+  }
+  @media(max-width:900px){
+    .shell{flex-direction:column;}
+    .sidebar{position:relative;height:auto;width:100%;}
+    nav{display:flex;overflow-x:auto;padding:8px;}
+    .nav-btn{white-space:nowrap;}
+    .main{padding:20px;}
+    .kpi-row{grid-template-columns:repeat(2,1fr);}
+    .map-layout{grid-template-columns:1fr;}
+    .form-grid{grid-template-columns:1fr;}
+  }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <p class="eyebrow">Equipment Registry</p>
+      <h1>ระบบบริหารจัดการ UPS</h1>
+      <div class="sub">ภาควิชาจุลชีววิทยา · รพ.จุฬาลงกรณ์ สภากาชาดไทย</div>
+    </div>
+    <div class="lab-switch">
+      <label>ห้องปฏิบัติการที่กำลังดู</label>
+      <select id="labSwitcher"></select>
+      <button class="auth-btn" id="btnQuickAddLab" style="margin-top:8px;display:none;">+ เพิ่มห้องปฏิบัติการใหม่</button>
+    </div>
+    <nav id="nav"></nav>
+    <div class="auth-panel" id="authPanel"></div>
+  </aside>
+  <main class="main" id="main"></main>
+</div>
+
+<div class="modal-bg" id="modalBg"><div class="modal" id="modalBody"></div></div>
+<div class="toast" id="toast"></div>
+<div id="qrPrintSheet"></div>
+
+<script>
+/* =========================================================
+   FIREBASE / FIRESTORE CONFIG
+========================================================= */
+/* Fill these in from: Firebase Console > Project settings > General >
+   Your apps > SDK setup and configuration. These values are meant to be
+   public/client-side — real protection comes from Firestore Security
+   Rules (see firestore.rules in the setup package), not from hiding this. */
+const firebaseConfig = {
+  apiKey: "AIzaSyAWhxKizhMGDFuSDEWVrPE2cpDl8Jn1V8M",
+  authDomain: "ups-mdcu-3a6bc.firebaseapp.com",
+  projectId: "ups-mdcu-3a6bc",
+  storageBucket: "ups-mdcu-3a6bc.firebasestorage.app",
+  messagingSenderId: "442022652746",
+  appId: "1:442022652746:web:41b69ff3bdad34f101efb3",
+  measurementId: "G-ND8MLSE6QJ"
+};
+const FS={ assets:'assets', labs:'labs', mapBgs:'map_backgrounds', settings:'app_settings' };
+const SETTINGS_DOC_ID='main';
+let db=null;
+let hashRouteHandled=false;
+
+const SESSION_KEY='ups_mgmt_session_v1';
+const CURLAB_KEY='ups_mgmt_current_lab_v1';
+
+let assets=[];
+let labs=[];
+let mapBgs={};
+let settings={ qrBaseUrl:'', masterPasswordHash:null };
+let session={ role:'public' };
+let currentLabId=null;
+let currentView='dashboard';
+let selectedAssetId=null;
+let selectedIds=new Set();
+
+const DEFAULT_LABS=[
+  {id:'lab1', name:'ห้องปฏิบัติการภูมิคุ้มกันวิทยา อาคารภูมิสิริฯ (PS2I) (Immunology)', defaultPw:'lab1-2569'},
+  {id:'lab2', name:'ห้องปฏิบัติการแบคทีเรียวิทยา (Bacteriology)', defaultPw:'lab2-2569'},
+  {id:'lab3', name:'ห้องปฏิบัติการไวรัสวิทยา (Virology)', defaultPw:'lab3-2569'},
+  {id:'lab4', name:'ห้องปฏิบัติการปรสิตวิทยา (Parasitology)', defaultPw:'lab4-2569'},
+  {id:'lab5', name:'ห้องปฏิบัติการมัยโคแบคทีเรีย/วัณโรค (Mycobacteriology)', defaultPw:'lab5-2569'},
+  {id:'lab6', name:'ห้องปฏิบัติการราวิทยา (Mycology)', defaultPw:'lab6-2569'},
+  {id:'lab7', name:'ห้องปฏิบัติการอณูชีววิทยา (Molecular Diagnostics)', defaultPw:'lab7-2569'},
+];
+const DEFAULT_MASTER_PW='master-2569';
+
+/* Standard MA (annual maintenance) checklist — shared reference list used
+   both on the "ความรู้เกี่ยวกับ UPS" page and as the per-asset checklist
+   in the asset edit form. */
+const MA_CHECKLIST_ITEMS=[
+  {id:'visual', label:'ตรวจสภาพภายนอกเครื่องและแบตเตอรี่ (บวม / รั่ว / คราบสนิม)'},
+  {id:'connections', label:'ตรวจความแน่นของจุดต่อสายไฟและขั้วแบตเตอรี่'},
+  {id:'clean', label:'ทำความสะอาดฝุ่นภายในเครื่องด้วยผ้าแห้ง/ลมเป่า (ห้ามใช้น้ำ)'},
+  {id:'voltage', label:'ตรวจค่าแรงดันแบตเตอรี่เทียบกับสเปกที่ระบุไว้ในทะเบียน'},
+  {id:'battery_test', label:'ทดสอบสลับโหมดแบตเตอรี่ชั่วครู่ (แจ้งผู้ใช้งานก่อนทุกครั้ง)'},
+  {id:'load', label:'ตรวจสอบโหลดที่ต่อยังไม่เกินพิกัดเครื่อง'},
+  {id:'thermography', label:'ตรวจวัดความร้อนด้วยกล้อง Thermography (ถ้าหน่วยงานมีบริการ)'},
+  {id:'record', label:'บันทึกผลตรวจและปรับสถานะความเสี่ยงในทะเบียนให้เป็นปัจจุบัน'},
+];
+
+/* =========================================================
+   PERSISTENCE — Firestore-backed, real-time across all users.
+   assets/labs/mapBgs/settings are kept in sync via onSnapshot
+   listeners; session + currentLabId stay local (per-browser).
+========================================================= */
+function loadLocalOnly(){
+  try{ const rawSess=sessionStorage.getItem(SESSION_KEY); session = rawSess? JSON.parse(rawSess) : {role:'public'}; }
+  catch(e){ session={role:'public'}; }
+  currentLabId = localStorage.getItem(CURLAB_KEY) || null;
+}
+function saveSession(){ sessionStorage.setItem(SESSION_KEY, JSON.stringify(session)); }
+function saveCurrentLab(){ localStorage.setItem(CURLAB_KEY, currentLabId); }
+function uid(){ return 'a_'+Math.random().toString(36).slice(2,10); }
+
+async function sha256(text){
+  const enc=new TextEncoder().encode(text);
+  const buf=await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+/* Runs once ever, only if app_settings/main doesn't exist yet — seeds
+   default labs (with default passwords) + the transcribed sample data
+   for lab1. Never re-seeds after that, even if data is later cleared
+   intentionally. */
+async function seedIfNeeded(){
+  const settingsRef=db.collection(FS.settings).doc(SETTINGS_DOC_ID);
+  const snap=await settingsRef.get();
+  if(snap.exists) return;
+
+  const masterHash=await sha256(DEFAULT_MASTER_PW);
+  await settingsRef.set({ qrBaseUrl:'', masterPasswordHash:masterHash, seeded:true, seeded_at:new Date().toISOString() });
+
+  const labBatch=db.batch();
+  for(const l of DEFAULT_LABS){
+    const hash=await sha256(l.defaultPw);
+    labBatch.set(db.collection(FS.labs).doc(l.id), { name:l.name, passwordHash:hash, contact_name:'', contact_phone:'' });
+  }
+  await labBatch.commit();
+
+  const assetBatch=db.batch();
+  seedAssets().forEach(a=>{
+    const { id, ...rest }=a;
+    assetBatch.set(db.collection(FS.assets).doc(a.asset_id), rest);
+  });
+  await assetBatch.commit();
+}
+
+function attachListeners(){
+  db.collection(FS.assets).onSnapshot(snap=>{
+    assets=snap.docs.map(d=>Object.assign({
+      lab_id:'lab1', contract:'', contract_company:'', contract_contact_name:'', contract_contact_email:'',
+      ma_checklist:{}, responsible_name:'', responsible_email:'',
+      acknowledge_status:'Pending', acknowledge_timestamp:null
+    }, d.data(), { id:d.id }));
+    render();
+    if(!hashRouteHandled){ hashRouteHandled=true; handleHashRoute(); }
+  }, err=>{ console.error(err); toast('เชื่อมต่อฐานข้อมูล (assets) ไม่สำเร็จ'); });
+
+  db.collection(FS.labs).onSnapshot(snap=>{
+    labs=snap.docs.map(d=>Object.assign({ contact_name:'', contact_phone:'' }, d.data(), { id:d.id }));
+    if(!currentLabId) currentLabId = localStorage.getItem(CURLAB_KEY) || labs[0]?.id || null;
+    if(currentLabId==='ALL' && session.role!=='master') currentLabId = labs[0]?.id || null;
+    render();
+  }, err=>{ console.error(err); toast('เชื่อมต่อฐานข้อมูล (labs) ไม่สำเร็จ'); });
+
+  db.collection(FS.mapBgs).onSnapshot(snap=>{
+    mapBgs={};
+    snap.docs.forEach(d=>{ mapBgs[d.id]=d.data(); });
+    render();
+  });
+
+  db.collection(FS.settings).doc(SETTINGS_DOC_ID).onSnapshot(doc=>{
+    if(doc.exists) settings=Object.assign({ qrBaseUrl:'', masterPasswordHash:null }, doc.data());
+    render();
+  });
+}
+
+/* =========================================================
+   SEED DATA (lab1 = Immunology, real data transcribed from
+   "Summary for Thermography Inspection" photo — check &
+   correct against the original document)
+========================================================= */
+function seedAssets(){
+  const flag='นำเข้าจากภาพสรุป Thermography Inspection — ตัวเลข/ตัวอักษรบางจุดอ่านจากลายมือไม่ชัดเจน กรุณาตรวจสอบและแก้ไขให้ตรงกับเอกสารจริง';
+  return [
+    r('UPS-MICRO-01','lab1','3','Chula Micro','2.4 kVA','Chuphotic','70 Vdc','A2406','8','2567','2','8','26A','32','2024-05-23','2027-05-22', flag, 12,28),
+    r('UPS-MICRO-02','lab1','3','Chula Micro','3 kVA','EATON','72 Vdc','GE08PA-1180','9','2567','2','8','13A','1','2024-05-20','2026-05-20', flag, 22,28),
+    r('UPS-MICRO-03','lab1','3','Chula Micro','3 kVA','EATON','79 Vdc','GE08PI-9323','9','2567','2','8','13A','1','2024-05-20','2026-05-20', flag, 32,28),
+    r('UPS-MICRO-04','lab1','3','Chula Micro','3 kVA','EATON','72 Vdc','GE08PI-9330','9','2567','2','8','13A','1','2024-05-21','2026-05-21', flag, 42,28),
+    r('UPS-MICRO-05','lab1','3','Chula Micro','3 kVA','EATON','79 Vdc','GE08P4-1179','8','2567','2','8','13A','1','2024-05-21','2026-05-21', flag, 52,28),
+    r('UPS-MICRO-06','lab1','3','Chula Micro','1 kVA','Cleanline','220 Vac','1L2BT-02366','-','2559','2','-','9A','1','2024-05-30','2026-05-30', flag, 12,55),
+    r('UPS-MICRO-CBC','lab1','3','Chula Micro CBC','1.05 kVA','Chuphotic','1050VA / 630W','27500UP-191048','4','2566','3','3','7.5 Ah','2','2026-01-05','2028-01-05', flag, 30,70),
+    r('UPS-MICRO-FLOW','lab1','3','Chula Micro flow','2 kVA','Chuphotic','96 Vdc','18475SS-241047','ชื่อผู้รับผิดชอบ (ลายมืออ่านไม่ชัด)','2565','3','3','7.5 A','1','2022-06-11','2027-04-11', flag, 50,70),
+    r('UPS-MICRO-E411-A','lab1','3','Chula Micro E411 (624425)','2 kVA','','','13171KH-141003','', '2023-12-13','2','2','','', '', '', flag, 70,70),
+    r('UPS-MICRO-E411-B','lab1','3','Chula Micro E411 (1992-14)','2 kVA','LEONIC','','20929100-55004','', '2021-03-14','','5','','', '', '', flag, 90,70),
+  ];
+  function r(asset_id,lab_id,floor,location,load_va,brand,ups_rating,serial_number,contract_responsible,install_year_text,duration_years,estimated_lifespan,battery_size,battery_qty,last_battery_date,next_battery_date,notes,x,y){
+    return { id:uid(), asset_id, lab_id, floor, location, load_va, brand, ups_rating, serial_number,
+      contract:contract_responsible, contract_company:'', contract_contact_name:'', contract_contact_email:'',
+      install_year_text, duration_years, estimated_lifespan, battery_size, battery_qty,
+      connected_device:'', start_date:null,
+      last_battery_date:last_battery_date||null, next_battery_date:next_battery_date||null, next_ma_date:null,
+      risk_status:'green', responsible_name:'', responsible_email:'',
+      acknowledge_status:'Pending', acknowledge_timestamp:null, x, y, notes, ma_checklist:{} };
+  }
+}
+
+/* =========================================================
+   PERMISSIONS
+========================================================= */
+function canEditLab(labId){ return session.role==='master' || (session.role==='lab' && session.labId===labId); }
+function canEditCurrentScope(){ return currentLabId==='ALL' ? session.role==='master' : canEditLab(currentLabId); }
+function getLab(id){ return labs.find(l=>l.id===id); }
+function getScopedAssets(){ return currentLabId==='ALL' ? assets : assets.filter(a=>a.lab_id===currentLabId); }
+function roleLabel(){
+  if(session.role==='master') return '🛡️ ผู้ดูแลระบบรวม (แก้ไขได้ทุกห้อง)';
+  if(session.role==='lab') return `🔧 ผู้ดูแล: ${getLab(session.labId)?.name||session.labId}`;
+  return '👁️ โหมดดูอย่างเดียว (สาธารณะ)';
+}
+
+/* =========================================================
+   DERIVED / RISK LOGIC
+========================================================= */
+function addYearsISO(dateStr,n){ if(!dateStr) return null; const d=new Date(dateStr); d.setFullYear(d.getFullYear()+n); return d.toISOString().slice(0,10); }
+function nextBatteryDue(a){ return a.next_battery_date || addYearsISO(a.last_battery_date,2); }
+function daysUntil(dateStr){ if(!dateStr) return null; const t=new Date(); t.setHours(0,0,0,0); const d=new Date(dateStr); d.setHours(0,0,0,0); return Math.round((d-t)/86400000); }
+const RISK_LABEL={red:'วิกฤต / บวม',yellow:'เฝ้าระวัง',green:'ปกติ'};
+const RISK_COLOR={red:'var(--red)',yellow:'var(--yellow)',green:'var(--green)'};
+function batteryAlertLevel(a){ const d=daysUntil(nextBatteryDue(a)); if(d===null) return null; if(d<=30) return {days:d,overdue:d<0}; return null; }
+function maAlertLevel(a){ const d=daysUntil(a.next_ma_date); if(d===null) return null; if(d<=7) return {days:d,overdue:d<0}; return null; }
+function fmtDate(d){ if(!d) return '—'; const dt=new Date(d); return dt.toLocaleDateString('th-TH',{year:'numeric',month:'short',day:'numeric'}); }
+function fmtDateTime(d){ if(!d) return '—'; const dt=new Date(d); return dt.toLocaleDateString('th-TH',{year:'numeric',month:'short',day:'numeric'})+' '+dt.toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}); }
+
+function maChecklistStats(a){
+  const cl=a.ma_checklist||{};
+  let pass=0, fail=0, unchecked=0;
+  MA_CHECKLIST_ITEMS.forEach(item=>{
+    const r=cl[item.id]?.result;
+    if(r==='pass') pass++; else if(r==='fail') fail++; else unchecked++;
+  });
+  return {pass, fail, unchecked, total:MA_CHECKLIST_ITEMS.length};
+}
+function maChecklistBadge(a){
+  const s=maChecklistStats(a);
+  if(s.pass===0 && s.fail===0) return `<span class="helptext">ยังไม่บันทึก</span>`;
+  const parts=[];
+  if(s.pass) parts.push(`<span style="color:var(--green)">✓ ผ่าน ${s.pass}</span>`);
+  if(s.fail) parts.push(`<span style="color:var(--red)">✕ ไม่ผ่าน ${s.fail}</span>`);
+  if(s.unchecked) parts.push(`<span class="helptext">ยังไม่ตรวจ ${s.unchecked}</span>`);
+  return parts.join(' · ');
+}
+
+/* =========================================================
+   NAV / SHELL
+========================================================= */
+const NAV_ITEMS=[
+  {id:'dashboard',label:'แผนที่ / แดชบอร์ด',icon:'🗺️'},
+  {id:'assets',label:'รายการเครื่อง UPS',icon:'🗂️'},
+  {id:'alerts',label:'แจ้งเตือน',icon:'🔔'},
+  {id:'contacts',label:'ผู้รับผิดชอบห้อง',icon:'☎️'},
+  {id:'knowledge',label:'ความรู้เกี่ยวกับ UPS',icon:'📘'},
+  {id:'settings',label:'ตั้งค่า / ผู้ดูแลระบบ',icon:'⚙️'},
+];
+function renderLabSwitcher(){
+  const sel=document.getElementById('labSwitcher');
+  const opts=labs.map(l=>`<option value="${l.id}" ${currentLabId===l.id?'selected':''}>${escapeHtml(l.name)}</option>`).join('');
+  const allOpt = session.role==='master' ? `<option value="ALL" ${currentLabId==='ALL'?'selected':''}>🌐 ทุกห้องปฏิบัติการ (ภาพรวม)</option>` : '';
+  sel.innerHTML = allOpt + opts;
+  sel.onchange=()=>{ currentLabId=sel.value; saveCurrentLab(); selectedAssetId=null; selectedIds.clear(); currentView='dashboard'; render(); };
+
+  const quickAddBtn=document.getElementById('btnQuickAddLab');
+  if(session.role==='master'){
+    quickAddBtn.style.display='block';
+    quickAddBtn.onclick=openQuickAddLabModal;
+  } else {
+    quickAddBtn.style.display='none';
+  }
+}
+function openQuickAddLabModal(){
+  document.getElementById('modalBody').innerHTML=`
+    <h3>เพิ่มห้องปฏิบัติการใหม่</h3>
+    <p class="modal-sub">ห้องใหม่จะได้รหัสผ่านผู้ดูแลเริ่มต้นคือ <span class="mono">lab-2569</span> — เปลี่ยนได้ภายหลังในหน้า “ตั้งค่า”</p>
+    <div class="form-field"><label>ชื่อห้องปฏิบัติการ *</label><input id="f_quick_lab_name" autofocus placeholder="เช่น ห้องปฏิบัติการเคมีคลินิก"></div>
+    <div class="modal-foot">
+      <button class="btn" id="btnCancelQuickAdd">ยกเลิก</button>
+      <button class="btn btn-primary" id="btnConfirmQuickAdd">+ เพิ่มห้องปฏิบัติการ</button>
+    </div>`;
+  document.getElementById('modalBg').classList.add('open');
+  document.getElementById('modalBody').classList.add('narrow');
+  const input=document.getElementById('f_quick_lab_name');
+  input.addEventListener('keydown', e=>{ if(e.key==='Enter') confirmQuickAddLab(); });
+  document.getElementById('btnCancelQuickAdd').onclick=closeModal;
+  document.getElementById('btnConfirmQuickAdd').onclick=confirmQuickAddLab;
+}
+async function confirmQuickAddLab(){
+  const name=document.getElementById('f_quick_lab_name').value.trim();
+  if(!name){ toast('กรุณาระบุชื่อห้องปฏิบัติการ'); return; }
+  const newLab=await addNewLab(name);
+  closeModal();
+  currentLabId=newLab.id; saveCurrentLab(); currentView='dashboard';
+  render();
+  toast('เพิ่มห้องปฏิบัติการแล้ว (รหัสผ่านเริ่มต้น: lab-2569)');
+}
+async function addNewLab(name){
+  const id='lab_'+Math.random().toString(36).slice(2,8);
+  const newLab={id, name, passwordHash: await sha256('lab-2569'), contact_name:'', contact_phone:''};
+  const { id:_drop, ...data }=newLab;
+  await db.collection(FS.labs).doc(id).set(data);
+  return newLab;
+}
+function renderNav(){
+  const nav=document.getElementById('nav');
+  const alertCount=countActiveAlerts();
+  nav.innerHTML=NAV_ITEMS.map(item=>`
+    <button class="nav-btn ${currentView===item.id?'active':''}" data-view="${item.id}">
+      <span class="lbl">${item.icon} ${item.label}</span>
+      ${item.id==='alerts'&&alertCount>0?`<span class="nav-badge">${alertCount}</span>`:''}
+    </button>`).join('');
+  nav.querySelectorAll('.nav-btn').forEach(btn=>btn.addEventListener('click',()=>{currentView=btn.dataset.view; render();}));
+
+  const authPanel=document.getElementById('authPanel');
+  if(session.role==='public'){
+    authPanel.innerHTML=`<div class="auth-role"><span class="role-dot" style="background:#7F98A0"></span>${roleLabel()}</div><button class="auth-btn" id="btnLogin">🔑 เข้าสู่ระบบผู้ดูแล</button>`;
+    document.getElementById('btnLogin').onclick=openLoginModal;
+  } else {
+    authPanel.innerHTML=`<div class="auth-role">${roleLabel()}</div><button class="auth-btn" id="btnLogout">ออกจากระบบ</button>`;
+    document.getElementById('btnLogout').onclick=()=>{ session={role:'public'}; saveSession(); if(currentLabId==='ALL') currentLabId=labs[0].id; render(); toast('ออกจากระบบแล้ว'); };
+  }
+}
+function countActiveAlerts(){
+  let n=0;
+  getScopedAssets().forEach(a=>{ if(batteryAlertLevel(a)&&a.acknowledge_status!=='Acknowledged') n++; if(maAlertLevel(a)) n++; });
+  return n;
+}
+function render(){
+  renderLabSwitcher(); renderNav();
+  const main=document.getElementById('main');
+  if(!labs.length){ main.innerHTML=`<div class="empty-state">⏳ กำลังเชื่อมต่อฐานข้อมูล...</div>`; return; }
+  if(currentView==='dashboard') main.innerHTML = currentLabId==='ALL' ? viewAllLabsDashboard() : viewDashboard();
+  else if(currentView==='assets') main.innerHTML=viewAssets();
+  else if(currentView==='alerts') main.innerHTML=viewAlerts();
+  else if(currentView==='contacts') main.innerHTML=viewContacts();
+  else if(currentView==='knowledge') main.innerHTML=viewKnowledge();
+  else if(currentView==='settings') main.innerHTML=viewSettings();
+  afterRender();
+}
+
+/* =========================================================
+   ALL-LABS OVERVIEW (master only)
+========================================================= */
+function viewAllLabsDashboard(){
+  const rows=labs.map(l=>{
+    const la=assets.filter(a=>a.lab_id===l.id);
+    return { l, total:la.length, red:la.filter(a=>a.risk_status==='red').length, yellow:la.filter(a=>a.risk_status==='yellow').length,
+      pending: la.filter(a=>a.acknowledge_status!=='Acknowledged'&&(batteryAlertLevel(a)||maAlertLevel(a))).length };
+  });
+  const total=assets.length, red=assets.filter(a=>a.risk_status==='red').length, yellow=assets.filter(a=>a.risk_status==='yellow').length;
+  const pending=assets.filter(a=>a.acknowledge_status!=='Acknowledged'&&(batteryAlertLevel(a)||maAlertLevel(a))).length;
+  return `
+    <div class="page-head"><div><h2>ภาพรวมทุกห้องปฏิบัติการ</h2><p>สรุปสถานะ UPS รวม ${labs.length} ห้องปฏิบัติการ — เลือกห้องจากเมนูด้านซ้ายเพื่อดูแผนที่และแก้ไขรายเครื่อง</p></div></div>
+    <div class="kpi-row">
+      <div class="kpi" style="--kc:var(--brand)"><div class="num mono">${total}</div><div class="lbl">เครื่อง UPS ทั้งหมด</div></div>
+      <div class="kpi" style="--kc:var(--red)"><div class="num mono">${red}</div><div class="lbl">สถานะวิกฤต (แดง)</div></div>
+      <div class="kpi" style="--kc:var(--yellow)"><div class="num mono">${yellow}</div><div class="lbl">เฝ้าระวัง (เหลือง)</div></div>
+      <div class="kpi" style="--kc:var(--gold)"><div class="num mono">${pending}</div><div class="lbl">รอการรับทราบแจ้งเตือน</div></div>
+    </div>
+    <table class="lab-tally">
+      <thead><tr><th>ห้องปฏิบัติการ</th><th>ทั้งหมด</th><th>วิกฤต</th><th>เฝ้าระวัง</th><th>รอรับทราบ</th><th></th></tr></thead>
+      <tbody>${rows.map(r=>`<tr>
+        <td style="text-align:right;">${escapeHtml(r.l.name)}</td>
+        <td class="mono">${r.total}</td>
+        <td class="mono" style="color:var(--red)">${r.red}</td>
+        <td class="mono" style="color:var(--yellow)">${r.yellow}</td>
+        <td class="mono">${r.pending}</td>
+        <td><button class="btn btn-sm" data-goto-lab="${r.l.id}">เปิดห้องนี้</button></td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+}
+
+/* =========================================================
+   DASHBOARD / MAP VIEW (single lab)
+========================================================= */
+function viewDashboard(){
+  const scoped=getScopedAssets();
+  const total=scoped.length, red=scoped.filter(a=>a.risk_status==='red').length, yellow=scoped.filter(a=>a.risk_status==='yellow').length;
+  const pending=scoped.filter(a=>a.acknowledge_status!=='Acknowledged'&&(batteryAlertLevel(a)||maAlertLevel(a))).length;
+  const editable=canEditCurrentScope();
+  const bg=mapBgs[currentLabId];
+  return `
+    <div class="page-head">
+      <div><h2>${escapeHtml(getLab(currentLabId)?.name||'')}</h2><p>${editable?'คลิกที่หมุดบนแผนผังเพื่อดูรายละเอียดเครื่อง หรือลากหมุดเพื่อจัดตำแหน่งใหม่':'โหมดดูอย่างเดียว — คลิกหมุดเพื่อดูรายละเอียดเครื่อง'}</p></div>
+      ${editable?`<button class="btn btn-primary" id="btnAddFromDash">+ เพิ่มเครื่อง UPS</button>`:`<span class="badge-view">👁️ ดูอย่างเดียว</span>`}
+    </div>
+    <div class="kpi-row">
+      <div class="kpi" style="--kc:var(--brand)"><div class="num mono">${total}</div><div class="lbl">เครื่อง UPS ทั้งหมด</div></div>
+      <div class="kpi" style="--kc:var(--red)"><div class="num mono">${red}</div><div class="lbl">สถานะวิกฤต (แดง)</div></div>
+      <div class="kpi" style="--kc:var(--yellow)"><div class="num mono">${yellow}</div><div class="lbl">เฝ้าระวัง (เหลือง)</div></div>
+      <div class="kpi" style="--kc:var(--gold)"><div class="num mono">${pending}</div><div class="lbl">รอการรับทราบแจ้งเตือน</div></div>
+    </div>
+    <div class="map-layout">
+      <div class="map-wrap">
+        <div class="map-toolbar">
+          <div class="legend">
+            <span><span class="dot" style="background:var(--red)"></span>วิกฤต / บวม</span>
+            <span><span class="dot" style="background:var(--yellow)"></span>เฝ้าระวัง</span>
+            <span><span class="dot" style="background:var(--green)"></span>ปกติ</span>
+          </div>
+          <span class="helptext">${bg?bg.name:'ยังไม่ได้อัปโหลดผังห้อง — ใช้กริดอ้างอิงตำแหน่งชั่วคราว'}</span>
+        </div>
+        <div class="map-canvas ${bg?'has-bg':''}" id="mapCanvas" style="${bg?`background-image:url('${bg.dataUrl}')`:''}">
+          ${!scoped.length?`<div class="map-empty-hint">ยังไม่มีเครื่อง UPS ในห้องนี้</div>`:''}
+        </div>
+      </div>
+      <div class="detail-card" id="detailCard">${renderDetailCard()}</div>
+    </div>`;
+}
+function renderDetailCard(){
+  const a=assets.find(x=>x.id===selectedAssetId);
+  if(!a) return `<div class="detail-empty">เลือกหมุดบนแผนผัง<br>เพื่อดูรายละเอียดเครื่อง</div>`;
+  const bAlert=batteryAlertLevel(a), mAlert=maAlertLevel(a);
+  const editable=canEditLab(a.lab_id);
+  return `
+    <h3>${a.asset_id}</h3>
+    <div class="risk-chip risk-${a.risk_status}">${RISK_LABEL[a.risk_status]}</div>
+    <div class="detail-row"><span class="k">ตำแหน่งติดตั้ง</span><span class="v">${escapeHtml(a.location)||'—'}</span></div>
+    <div class="detail-row"><span class="k">ยี่ห้อ / ขนาด (Rating)</span><span class="v">${escapeHtml(a.brand)} ${escapeHtml(a.ups_rating)}</span></div>
+    <div class="detail-row"><span class="k">หมายเลขเครื่อง</span><span class="v mono">${escapeHtml(a.serial_number)||'—'}</span></div>
+    <div class="detail-row"><span class="k">เปลี่ยนแบตล่าสุด</span><span class="v mono">${fmtDate(a.last_battery_date)}</span></div>
+    <div class="detail-row"><span class="k">กำหนดเปลี่ยนแบตถัดไป</span><span class="v mono">${fmtDate(nextBatteryDue(a))}</span></div>
+    <div class="detail-row"><span class="k">กำหนดบำรุงรักษา (MA)</span><span class="v mono">${fmtDate(a.next_ma_date)}</span></div>
+    <div class="detail-row"><span class="k">บริษัทตามสัญญา</span><span class="v">${escapeHtml(a.contract_company)||'—'}</span></div>
+    <div class="detail-row"><span class="k">ผู้รับผิดชอบ (บริษัท)</span><span class="v">${escapeHtml(a.contract_contact_name)||'—'}</span></div>
+    <div class="detail-row"><span class="k">ผลตรวจ MA ล่าสุด</span><span class="v">${maChecklistBadge(a)}</span></div>
+    <div class="detail-row"><span class="k">การรับทราบแจ้งเตือน</span><span class="v">${a.acknowledge_status==='Acknowledged'?`<span class="ack-tag">รับทราบแล้ว</span>`:'รอรับทราบ'}</span></div>
+    ${(bAlert||mAlert)?`<div class="callout" style="margin-top:12px;">
+      ${bAlert?`⏰ ${bAlert.overdue?'เลยกำหนดเปลี่ยนแบตเตอรี่แล้ว':'ใกล้ครบกำหนดเปลี่ยนแบตเตอรี่'} (${Math.abs(bAlert.days)} วัน)<br>`:''}
+      ${mAlert?`🛠️ ${mAlert.overdue?'เลยกำหนดบำรุงรักษาแล้ว':'ใกล้ครบกำหนดบำรุงรักษาประจำปี'} (${Math.abs(mAlert.days)} วัน)`:''}
+    </div>`:''}
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
+      ${editable?`<button class="btn btn-sm" data-edit="${a.id}">แก้ไข</button>`:''}
+      <button class="btn btn-sm" data-view-in-table="${a.id}">ดูในตาราง</button>
+      <button class="btn btn-sm" data-showqr="${a.id}">QR Code</button>
+      ${a.contract_contact_email?`<a class="btn btn-sm" href="mailto:${escapeAttr(a.contract_contact_email)}?subject=${encodeURIComponent('นัดหมาย MA / เปลี่ยนแบตเตอรี่ — '+a.asset_id)}">✉️ ติดต่อบริษัทนัด MA/เปลี่ยนแบต</a>`:''}
+    </div>`;
+}
+
+/* =========================================================
+   ASSETS TABLE VIEW
+========================================================= */
+function viewAssets(){
+  const scoped=getScopedAssets();
+  const editable=canEditCurrentScope();
+  const showLabCol=currentLabId==='ALL';
+  const allSelected=scoped.length>0 && scoped.every(a=>selectedIds.has(a.id));
+  return `
+    <div class="page-head">
+      <div><h2>ทะเบียนเครื่อง UPS ${showLabCol?'(ทุกห้อง)':''}</h2><p>ติ๊กเลือกแถวเพื่อส่งออกเป็น Excel หรือพิมพ์ QR — ${editable?'สามารถเพิ่ม/แก้ไข/ลบได้':'โหมดดูอย่างเดียว'}</p></div>
+      ${editable&&currentLabId!=='ALL'?`<button class="btn btn-primary" id="btnAddFromTable">+ เพิ่มเครื่อง UPS</button>`:''}
+    </div>
+    ${scoped.some(a=>a.notes&&a.notes.includes('นำเข้าจากภาพ'))?`<div class="callout">⚠️ <b>มีข้อมูลที่นำเข้าจากภาพถ่ายเอกสาร</b> — กรุณาเปิดแก้ไขแต่ละแถวเพื่อตรวจทานกับเอกสารต้นฉบับก่อนใช้งานจริง</div>`:''}
+    <div class="table-wrap">
+      <div class="table-toolbar">
+        <div class="left"><input type="checkbox" id="selectAllChk" ${allSelected?'checked':''}> เลือกทั้งหมด <span class="mono">(${selectedIds.size} รายการ)</span></div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-sm" id="btnPrintQrSelected" ${selectedIds.size?'':'disabled'}>🖨️ พิมพ์ QR ที่เลือก</button>
+          <button class="btn btn-sm btn-primary" id="btnExportExcel" ${selectedIds.size?'':'disabled'}>⬇️ ส่งออกที่เลือกเป็น Excel</button>
+        </div>
+      </div>
+      ${scoped.length?`
+      <table>
+        <thead><tr>
+          <th><input type="checkbox" id="selectAllChk2" ${allSelected?'checked':''}></th>
+          <th>QR</th><th>Asset ID</th>${showLabCol?'<th>ห้องปฏิบัติการ</th>':''}<th>ชั้น</th><th>สถานที่</th><th>โหลด</th><th>ยี่ห้อ</th><th>Rating</th>
+          <th>หมายเลขเครื่อง</th><th>สัญญา</th><th>บริษัท</th><th>ผู้รับผิดชอบ (บริษัท)</th><th>Email ผู้รับผิดชอบ</th><th>ปีติดตั้ง</th><th>ระยะเวลาใช้งาน</th><th>ประมาณอายุ</th>
+          <th>แบตขนาด</th><th>แบตจำนวน</th><th>เปลี่ยนแบตล่าสุด</th><th>เปลี่ยนแบตถัดไป</th><th>MA ถัดไป</th><th>ผลตรวจ MA ล่าสุด</th>
+          <th>สถานะ</th><th>รับทราบ</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${scoped.map(a=>{const rowEdit=canEditLab(a.lab_id); return `
+            <tr>
+              <td><input type="checkbox" class="rowChk" data-id="${a.id}" ${selectedIds.has(a.id)?'checked':''}></td>
+              <td><div class="qr-thumb" data-qr-thumb="${a.id}" data-showqr="${a.id}"></div></td>
+              <td class="mono">${a.asset_id}</td>
+              ${showLabCol?`<td>${escapeHtml(getLab(a.lab_id)?.name||a.lab_id)}</td>`:''}
+              <td>${escapeHtml(a.floor)}</td>
+              <td>${escapeHtml(a.location)}</td>
+              <td>${escapeHtml(a.load_va)}</td>
+              <td>${escapeHtml(a.brand)}</td>
+              <td>${escapeHtml(a.ups_rating)}</td>
+              <td class="mono">${escapeHtml(a.serial_number)}</td>
+              <td>${escapeHtml(a.contract)}</td>
+              <td>${escapeHtml(a.contract_company)}</td>
+              <td>${escapeHtml(a.contract_contact_name)}</td>
+              <td>${a.contract_contact_email?`<a href="mailto:${escapeAttr(a.contract_contact_email)}">${escapeHtml(a.contract_contact_email)}</a>`:''}</td>
+              <td>${escapeHtml(a.install_year_text)}</td>
+              <td>${escapeHtml(a.duration_years)}</td>
+              <td>${escapeHtml(a.estimated_lifespan)}</td>
+              <td>${escapeHtml(a.battery_size)}</td>
+              <td>${escapeHtml(a.battery_qty)}</td>
+              <td class="mono">${fmtDate(a.last_battery_date)}</td>
+              <td class="mono">${fmtDate(nextBatteryDue(a))}</td>
+              <td class="mono">${fmtDate(a.next_ma_date)}</td>
+              <td style="white-space:normal;min-width:150px;">${maChecklistBadge(a)}</td>
+              <td><span class="risk-chip risk-${a.risk_status}">${RISK_LABEL[a.risk_status]}</span></td>
+              <td>${a.acknowledge_status==='Acknowledged'?`<span class="ack-tag">รับทราบแล้ว</span>`:'รอรับทราบ'}</td>
+              <td class="actions-cell">
+                ${rowEdit?`<button class="btn btn-sm" data-edit="${a.id}">แก้ไข</button><button class="btn btn-sm btn-danger" data-del="${a.id}">ลบ</button>`:''}
+              </td>
+            </tr>`;}).join('')}
+        </tbody>
+      </table>`:`<div class="empty-state"><div class="big">🗄️</div>ยังไม่มีเครื่อง UPS ในทะเบียน</div>`}
+    </div>`;
+}
+
+/* =========================================================
+   ALERTS VIEW
+========================================================= */
+function viewAlerts(){
+  const scoped=getScopedAssets();
+  const battery=scoped.filter(a=>batteryAlertLevel(a)).sort((a,b)=>daysUntil(nextBatteryDue(a))-daysUntil(nextBatteryDue(b)));
+  const ma=scoped.filter(a=>maAlertLevel(a)).sort((a,b)=>daysUntil(a.next_ma_date)-daysUntil(a.next_ma_date));
+  return `
+    <div class="page-head"><div><h2>ศูนย์แจ้งเตือน</h2><p>รายการที่ใกล้ครบกำหนดเปลี่ยนแบตเตอรี่ (ล่วงหน้า 30 วัน) และบำรุงรักษาประจำปี (ล่วงหน้า 7 วัน)</p></div></div>
+    <div class="callout">
+      <b>หมายเหตุการทำงาน:</b> ไฟล์นี้เป็นแอปฝั่งผู้ใช้ (client-side) จึงยังไม่มีเซิร์ฟเวอร์คอยรัน Cron Job หรือส่งอีเมลอัตโนมัติจริง
+      ระบบจะสแกนแจ้งเตือนทุกครั้งที่เปิดหน้านี้ ปุ่ม “ส่งอีเมลแจ้งเตือน” จะเปิดโปรแกรมอีเมลพร้อมข้อความร่างไว้ให้ (mailto)
+    </div>
+    <div class="alert-group"><h4>🔋 แจ้งเตือนเปลี่ยนแบตเตอรี่ (${battery.length})</h4>
+      ${battery.length?battery.map(a=>alertCard(a,'battery')).join(''):`<div class="empty-state" style="padding:24px;">ไม่มีรายการใกล้ครบกำหนดในขณะนี้</div>`}
+    </div>
+    <div class="alert-group"><h4>🛠️ แจ้งเตือนบำรุงรักษาประจำปี (${ma.length})</h4>
+      ${ma.length?ma.map(a=>alertCard(a,'ma')).join(''):`<div class="empty-state" style="padding:24px;">ไม่มีรายการใกล้ครบกำหนดในขณะนี้</div>`}
+    </div>`;
+}
+function alertCard(a,type){
+  const info=type==='battery'?batteryAlertLevel(a):maAlertLevel(a);
+  const due=type==='battery'?nextBatteryDue(a):a.next_ma_date;
+  const kc=info.overdue?'var(--red)':'var(--yellow)';
+  const verb=type==='battery'?'เปลี่ยนแบตเตอรี่':'บำรุงรักษาประจำปี (MA)';
+  const statusMsg=info.overdue?`เลยกำหนด${verb}มาแล้ว <strong>${Math.abs(info.days)} วัน</strong> (กำหนด ${fmtDate(due)})`:`ใกล้ครบกำหนด${verb}ใน <strong>${info.days} วัน</strong> (กำหนด ${fmtDate(due)})`;
+  const subject=encodeURIComponent(`แจ้งเตือน${verb} — ${a.asset_id}`);
+  const body=encodeURIComponent(`เรียน ${a.responsible_name||'ผู้รับผิดชอบ'}\n\nระบบแจ้งเตือน${verb}สำหรับเครื่อง UPS ดังนี้\nAsset ID: ${a.asset_id}\nห้องปฏิบัติการ: ${getLab(a.lab_id)?.name||''}\nตำแหน่ง: ${a.location}\nกำหนด: ${fmtDate(due)}\n\nกรุณาดำเนินการและกดรับทราบในระบบทะเบียน UPS\nขอบคุณครับ/ค่ะ`);
+  const mailLink=a.responsible_email?`mailto:${a.responsible_email}?subject=${subject}&body=${body}`:null;
+  const editable=canEditLab(a.lab_id);
+  return `
+    <div class="alert-card" style="--kc:${kc}">
+      <div class="info">
+        <div><b>${a.asset_id}</b> · ${escapeHtml(a.location)} ${currentLabId==='ALL'?`· <span class="helptext">${escapeHtml(getLab(a.lab_id)?.name||'')}</span>`:''}</div>
+        <div class="msg">${statusMsg}</div>
+        <div class="msg">ผู้รับผิดชอบ: ${escapeHtml(a.responsible_name)||'ยังไม่ระบุ'} ${a.acknowledge_status==='Acknowledged'?`<span class="ack-tag" style="margin-right:6px;">รับทราบแล้ว ${fmtDateTime(a.acknowledge_timestamp)}</span>`:''}</div>
+      </div>
+      <div class="alert-actions">
+        ${mailLink?`<a class="btn btn-sm" href="${mailLink}">✉️ ส่งอีเมลแจ้งเตือน</a>`:`<span class="helptext">ไม่มีอีเมลผู้รับผิดชอบ</span>`}
+        ${editable&&a.acknowledge_status!=='Acknowledged'?`<button class="btn btn-sm btn-gold" data-ack="${a.id}">กดรับทราบ</button>`:''}
+      </div>
+    </div>`;
+}
+
+/* =========================================================
+   LAB CONTACTS VIEW — responsible person per lab + phone
+========================================================= */
+function viewContacts(){
+  return `
+    <div class="page-head"><div><h2>ผู้รับผิดชอบห้องปฏิบัติการ</h2><p>รายชื่อและเบอร์ติดต่อกลับของผู้รับผิดชอบดูแล UPS แต่ละห้อง — ใช้เมื่อพบความผิดปกติแล้วต้องแจ้งเจ้าของห้อง</p></div></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ห้องปฏิบัติการ</th><th>ชื่อผู้รับผิดชอบ</th><th>หมายเลขติดต่อกลับ</th><th></th></tr></thead>
+        <tbody>
+          ${labs.map(l=>{
+            const editable=canEditLab(l.id);
+            return `<tr>
+              <td style="text-align:right;">${escapeHtml(l.name)}</td>
+              <td>${editable?`<input type="text" data-contact-name="${l.id}" value="${escapeAttr(l.contact_name)}" placeholder="ชื่อ-นามสกุล" style="width:100%;padding:6px 9px;border:1px solid var(--line);border-radius:6px;">`:(escapeHtml(l.contact_name)||'<span class="helptext">ยังไม่ระบุ</span>')}</td>
+              <td>${editable?`<input type="text" data-contact-phone="${l.id}" value="${escapeAttr(l.contact_phone)}" placeholder="0xx-xxx-xxxx" class="mono" style="width:100%;padding:6px 9px;border:1px solid var(--line);border-radius:6px;">`:(l.contact_phone?`<a class="mono" href="tel:${escapeAttr(l.contact_phone)}">${escapeHtml(l.contact_phone)}</a>`:'<span class="helptext">ยังไม่ระบุ</span>')}</td>
+              <td>${editable?`<button class="btn btn-sm btn-primary" data-save-contact="${l.id}">บันทึก</button>`:''}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+    ${session.role==='public'?`<div class="callout blue" style="margin-top:16px;">เข้าสู่ระบบผู้ดูแล (รวมหรือรายห้อง) เพื่ออัปเดตชื่อและเบอร์ติดต่อของห้องที่รับผิดชอบ</div>`:''}`;
+}
+
+/* =========================================================
+   UPS KNOWLEDGE VIEW — static educational content
+========================================================= */
+function viewKnowledge(){
+  return `
+    <div class="page-head"><div><h2>ความรู้เบื้องต้นเกี่ยวกับ UPS</h2><p>สำหรับผู้ปฏิบัติงานประจำห้องแล็บ — วิธีสังเกต ดูแลรักษา และขั้นตอนเมื่อพบความผิดปกติ</p></div></div>
+
+    <div class="settings-card">
+      <h4>🔌 UPS คืออะไร</h4>
+      <p style="margin:0;line-height:1.8;">เครื่องสำรองไฟ (UPS: Uninterruptible Power Supply) ทำหน้าที่จ่ายไฟฟ้าสำรองจากแบตเตอรี่ให้อุปกรณ์ต่อเนื่องทันทีเมื่อไฟฟ้าหลักดับหรือกระชาก
+      เพื่อป้องกันข้อมูลสูญหายและป้องกันความเสียหายต่อเครื่องมือ/ผลตรวจที่กำลังทำงานอยู่ อายุการใช้งานแบตเตอรี่ทั่วไปอยู่ที่ประมาณ 2–5 ปี ขึ้นกับชนิดแบตเตอรี่ อุณหภูมิ และความถี่ในการใช้งาน</p>
+    </div>
+
+    <div class="settings-card">
+      <h4>🛠️ การบำรุงรักษาเบื้องต้น</h4>
+      <ul style="margin:0;padding-right:18px;line-height:1.9;">
+        <li>วางเครื่องในที่อากาศถ่ายเทดี ห่างจากความชื้นและความร้อน — ทุก 10°C ที่อุณหภูมิรอบเครื่องสูงขึ้นจากระดับปกติ อายุแบตเตอรี่จะลดลงเกือบครึ่งหนึ่ง</li>
+        <li>ตรวจสอบว่าโหลดที่ต่อกับ UPS ไม่เกินพิกัดที่ระบุ (VA/Watt) ของเครื่อง</li>
+        <li>ตรวจสอบสายไฟ ปลั๊ก และจุดต่อสายไม่ให้หลวมหรือมีรอยไหม้</li>
+        <li>บันทึกวันที่เปลี่ยนแบตเตอรี่และกำหนดเปลี่ยนครั้งถัดไปไว้ในระบบทะเบียนเสมอ</li>
+        <li>ทดสอบการทำงานโหมดแบตเตอรี่เป็นระยะตามรอบ MA ประจำปี โดยผู้ที่ได้รับมอบหมาย/ช่างเทคนิคเท่านั้น และแจ้งผู้ใช้งานเครื่องมือก่อนทุกครั้ง</li>
+      </ul>
+    </div>
+
+    <div class="settings-card">
+      <h4>⚠️ ข้อสังเกตและสัญญาณความผิดปกติ</h4>
+      <ul style="margin:0;padding-right:18px;line-height:1.9;">
+        <li><b>แบตเตอรี่บวม</b> — ตัวแบตเตอรี่ป่องผิดรูปจากปกติ เป็นสัญญาณอันตรายที่ต้องหยุดใช้และแจ้งเปลี่ยนทันที</li>
+        <li><b>กลิ่นเหม็นฉุนคล้ายกำมะถัน/ไข่เน่า</b> — อาจเกิดจากแบตเตอรี่รั่วหรือเสื่อมสภาพรุนแรง</li>
+        <li><b>เสียงร้องเตือน (alarm/beep) ต่อเนื่อง</b> หรือไฟสถานะเปลี่ยนเป็นสีแดง/กะพริบผิดปกติ</li>
+        <li><b>ตัวเครื่องร้อนผิดปกติ</b> เมื่อสัมผัส หรือมีรอยไหม้/คราบดำรอบช่องระบายอากาศ</li>
+        <li><b>ระยะเวลาสำรองไฟสั้นลงมาก</b> จากที่เคยรองรับได้ (สัญญาณแบตเตอรี่เสื่อม)</li>
+        <li>มีคราบสนิมหรือคราบขาวที่ขั้วแบตเตอรี่ หรือจอแสดงผลขึ้นรหัสข้อผิดพลาด (error code)</li>
+      </ul>
+    </div>
+
+    <div class="settings-card">
+      <h4>🚫 ข้อควรระวัง</h4>
+      <ul style="margin:0;padding-right:18px;line-height:1.9;">
+        <li>ห้ามผู้ไม่ได้รับการอบรมเปิดฝาเครื่องหรือเปลี่ยนแบตเตอรี่เอง เสี่ยงไฟดูดและอันตรายจากสารเคมีในแบตเตอรี่</li>
+        <li>ห้ามเจาะ บีบ หรือทำให้ขั้วแบตเตอรี่ลัดวงจร และห้ามโยนแบตเตอรี่เก่าทิ้งรวมกับขยะทั่วไป — ต้องทิ้งตามระบบขยะอันตรายของโรงพยาบาล</li>
+        <li>ห้ามวางเครื่องใกล้เปลวไฟหรือแหล่งน้ำ และควรเว้นระยะระบายอากาศรอบเครื่องตามคู่มือผู้ผลิต</li>
+        <li>ห้ามปิด/ถอดปลั๊ก UPS ที่กำลังจ่ายไฟให้เครื่องมือวิกฤต (เช่น เครื่องตรวจที่กำลังรันผล) โดยไม่แจ้งผู้ใช้งานก่อน</li>
+      </ul>
+    </div>
+
+    <div class="settings-card">
+      <h4>📝 Checklist สิ่งที่ต้องตรวจสอบตอนทำ MA (บำรุงรักษาประจำปี)</h4>
+      <p style="margin:0 0 10px;">รายการตรวจมาตรฐานที่ควรทำครบทุกข้อในการทำ MA แต่ละครั้ง — ติ๊กผลตรวจจริงของแต่ละเครื่อง (ผ่าน/ไม่ผ่าน + เหตุผล) ได้ที่หน้า “รายการเครื่อง UPS” → เปิดแก้ไขเครื่องนั้น → หัวข้อ “Checklist การทำ MA”</p>
+      <ul style="margin:0;padding-right:18px;line-height:2;list-style:none;">
+        ${MA_CHECKLIST_ITEMS.map(item=>`<li>☐ ${escapeHtml(item.label)}</li>`).join('')}
+      </ul>
+    </div>
+
+    <div class="callout red">
+      <b>หากพบความผิดปกติ:</b> ให้ตั้งสถานะเครื่องเป็น “เฝ้าระวัง” หรือ “วิกฤต / บวม” ในทะเบียน แล้วแจ้งผู้รับผิดชอบของห้องปฏิบัติการนั้นทันที
+      ดูรายชื่อและเบอร์ติดต่อได้ที่หน้า “ผู้รับผิดชอบห้อง”
+      <div style="margin-top:10px;"><button class="btn btn-sm btn-primary" id="btnGoContacts">☎️ ไปที่หน้าผู้รับผิดชอบห้อง</button></div>
+    </div>`;
+}
+
+/* =========================================================
+   SETTINGS VIEW
+========================================================= */
+function viewSettings(){
+  if(session.role==='public'){
+    return `
+      <div class="page-head"><div><h2>ตั้งค่า / ผู้ดูแลระบบ</h2><p>ต้องเข้าสู่ระบบผู้ดูแลก่อนจึงจะแก้ไขการตั้งค่าได้</p></div></div>
+      <div class="callout blue"><b>โหมดดูอย่างเดียว</b> — ทุกคนดูข้อมูล UPS ได้ แต่การแก้ไขข้อมูล อัปโหลดผังห้อง หรือเปลี่ยนรหัสผ่าน ต้องเข้าสู่ระบบด้วยรหัสผู้ดูแลก่อน</div>
+      <button class="btn btn-primary" id="btnLoginFromSettings">🔑 เข้าสู่ระบบผู้ดูแล</button>`;
+  }
+
+  const bg=mapBgs[currentLabId];
+  const labSpecific = currentLabId!=='ALL' && canEditLab(currentLabId) ? `
+    <div class="settings-card">
+      <h4>ผังห้อง — ${escapeHtml(getLab(currentLabId)?.name||'')}</h4>
+      <p>อัปโหลดรูปผังห้องหรือแปลนอาคาร (JPG/PNG) เพื่อใช้เป็นพื้นหลังของแผนที่แบบโต้ตอบของห้องนี้</p>
+      <div class="file-drop" id="mapDrop">📤 คลิกเพื่อเลือกไฟล์ภาพผังห้อง ${bg?`(ปัจจุบัน: ${bg.name})`:''}</div>
+      <input type="file" id="mapFileInput" accept="image/*" style="display:none;">
+      ${bg?`<button class="btn btn-sm btn-danger" style="margin-top:10px;" id="btnClearMap">ลบผังห้องปัจจุบัน</button>`:''}
+    </div>
+    <div class="settings-card">
+      <h4>เปลี่ยนรหัสผ่านผู้ดูแลห้องนี้</h4>
+      <p>รหัสผ่านนี้ใช้เข้าสู่ระบบเพื่อแก้ไขข้อมูลเฉพาะห้อง “${escapeHtml(getLab(currentLabId)?.name||'')}”</p>
+      <input type="password" id="f_lab_pw" placeholder="รหัสผ่านใหม่" style="width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:7px;margin-bottom:8px;">
+      <button class="btn btn-sm btn-primary" id="btnSaveLabPw">บันทึกรหัสผ่านห้องนี้</button>
+    </div>
+    <div class="settings-card">
+      <h4>สำรอง / กู้คืนข้อมูลห้องนี้</h4>
+      <p>สำรองหรือกู้คืนเฉพาะข้อมูลของห้อง “${escapeHtml(getLab(currentLabId)?.name||'')}”</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary" id="btnExportJson">⬇️ ดาวน์โหลดไฟล์สำรอง (.json)</button>
+        <button class="btn" id="btnImport">⬆️ นำเข้าไฟล์ (แทนที่ข้อมูลห้องนี้)</button>
+        <input type="file" id="importFileInput" accept="application/json" style="display:none;">
+      </div>
+    </div>
+    <div class="settings-card">
+      <h4>ล้างข้อมูลห้องนี้</h4>
+      <p>ลบข้อมูลเครื่อง UPS ทั้งหมดของห้อง “${escapeHtml(getLab(currentLabId)?.name||'')}” (ไม่กระทบห้องอื่น)</p>
+      <button class="btn btn-danger" id="btnResetLab">ล้างข้อมูลห้องนี้</button>
+    </div>` : '';
+
+  const masterOnly = session.role==='master' ? `
+    <div class="settings-card">
+      <h4>URL สำหรับ QR Code (ใช้ร่วมกันทุกห้อง)</h4>
+      <p>วาง URL ของไฟล์นี้เมื่อถูกอัปโหลดขึ้นเว็บแล้ว เพื่อให้สแกน QR จากมือถือเครื่องอื่นเปิดตรงไปยังเครื่อง UPS ได้ ถ้าเว้นว่างจะใช้ตำแหน่งไฟล์ปัจจุบันแทน</p>
+      <input type="text" id="f_qr_base" placeholder="https://your-domain.example.com/ups_management.html" value="${escapeAttr(settings.qrBaseUrl)}" style="width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:7px;font-family:var(--mono);font-size:13px;">
+      <button class="btn btn-sm btn-primary" id="btnSaveQrBase" style="margin-top:10px;">บันทึก</button>
+    </div>
+    <div class="settings-card">
+      <h4>จัดการห้องปฏิบัติการทั้งหมด (${labs.length} ห้อง)</h4>
+      <p>เปลี่ยนชื่อห้อง ตั้งรหัสผ่านผู้ดูแลของแต่ละห้อง หรือเพิ่ม/ลบห้อง</p>
+      ${labs.map(l=>`
+        <div class="lab-row">
+          <span class="lab-id">${l.id}</span>
+          <input type="text" data-lab-name="${l.id}" value="${escapeAttr(l.name)}">
+          <input type="password" data-lab-newpw="${l.id}" placeholder="ตั้งรหัสผ่านใหม่ (เว้นว่าง = ไม่เปลี่ยน)" style="max-width:220px;">
+          <button class="btn btn-sm" data-save-lab="${l.id}">บันทึก</button>
+          <button class="btn btn-sm btn-danger" data-del-lab="${l.id}">ลบห้อง</button>
+        </div>`).join('')}
+      <div style="display:flex;gap:8px;margin-top:14px;">
+        <input type="text" id="f_new_lab_name" placeholder="ชื่อห้องปฏิบัติการใหม่" style="flex:1;padding:9px 11px;border:1px solid var(--line);border-radius:7px;">
+        <button class="btn btn-primary" id="btnAddLab">+ เพิ่มห้องปฏิบัติการ</button>
+      </div>
+    </div>
+    <div class="settings-card">
+      <h4>เปลี่ยนรหัสผ่านผู้ดูแลระบบรวม</h4>
+      <p>รหัสผ่านนี้เข้าแก้ไขได้ทุกห้องปฏิบัติการ — เก็บไว้เป็นความลับสูงสุด</p>
+      <input type="password" id="f_master_pw" placeholder="รหัสผ่านใหม่" style="width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:7px;margin-bottom:8px;">
+      <button class="btn btn-sm btn-primary" id="btnSaveMasterPw">บันทึกรหัสผ่านผู้ดูแลระบบรวม</button>
+    </div>
+    <div class="settings-card">
+      <h4>สำรองข้อมูลทุกห้อง</h4>
+      <button class="btn btn-primary" id="btnExportAllJson">⬇️ ดาวน์โหลดข้อมูลทุกห้อง (.json)</button>
+    </div>` : '';
+
+  return `
+    <div class="page-head"><div><h2>ตั้งค่า / ผู้ดูแลระบบ</h2><p>เข้าสู่ระบบในฐานะ: ${roleLabel()}</p></div></div>
+    <div class="callout red"><b>ข้อควรทราบด้านความปลอดภัย:</b> ไฟล์นี้เป็นเว็บแอปฝั่งผู้ใช้ล้วนๆ ไม่มีเซิร์ฟเวอร์ตรวจสอบสิทธิ์จริง รหัสผ่านทำหน้าที่ป้องกันการแก้ไขโดยไม่ตั้งใจเท่านั้น
+      ผู้ที่เข้าถึงไฟล์และมีความรู้ด้านเทคนิคสามารถเลี่ยงการตรวจสอบนี้ได้ หากต้องการความปลอดภัยระดับจริงจัง (เช่น ข้อมูลอ่อนไหว ต้องพิสูจน์ตัวตนที่เชื่อถือได้) ควรพัฒนาต่อด้วยระบบเซิร์ฟเวอร์ + ฐานข้อมูลจริง เช่น Firebase Auth</div>
+    ${labSpecific}
+    ${masterOnly}
+    ${session.role==='lab' && currentLabId==='ALL' ? `<div class="callout">เลือกห้องปฏิบัติการของคุณจากเมนูด้านซ้ายเพื่อจัดการการตั้งค่า</div>`:''}
+    <div class="settings-card">
+      <h4>รหัสผ่านเริ่มต้น (ครั้งแรกเท่านั้น)</h4>
+      <p>หากยังไม่เคยเปลี่ยนรหัสผ่าน ระบบตั้งค่าเริ่มต้นไว้ดังนี้ — แนะนำให้เปลี่ยนทันทีหลังเข้าใช้งานครั้งแรก</p>
+      <p class="mono" style="font-size:12px;line-height:1.9;">ผู้ดูแลระบบรวม: master-2569<br>${DEFAULT_LABS.map(l=>`${l.name}: ${l.defaultPw}`).join('<br>')}</p>
+    </div>`;
+}
+
+/* =========================================================
+   LOGIN MODAL
+========================================================= */
+function openLoginModal(){
+  document.getElementById('modalBody').innerHTML=`
+    <h3>เข้าสู่ระบบผู้ดูแล</h3>
+    <p class="modal-sub">กรอกรหัสผ่านผู้ดูแลระบบรวม หรือรหัสผ่านผู้ดูแลของห้องปฏิบัติการของคุณ</p>
+    <div class="form-field"><label>รหัสผ่าน</label><input type="password" id="f_login_pw" autofocus></div>
+    <p class="helptext" id="loginError" style="color:var(--red);"></p>
+    <div class="modal-foot">
+      <button class="btn" id="btnCancelLogin">ยกเลิก</button>
+      <button class="btn btn-primary" id="btnDoLogin">เข้าสู่ระบบ</button>
+    </div>`;
+  document.getElementById('modalBg').classList.add('open');
+  document.getElementById('modalBody').classList.add('narrow');
+  document.getElementById('btnCancelLogin').onclick=closeModal;
+  const pwInput=document.getElementById('f_login_pw');
+  pwInput.addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
+  document.getElementById('btnDoLogin').onclick=doLogin;
+}
+async function doLogin(){
+  const pw=document.getElementById('f_login_pw').value;
+  if(!pw) return;
+  const hash=await sha256(pw);
+  if(hash===settings.masterPasswordHash){
+    session={role:'master'}; saveSession(); closeModal(); render(); toast('เข้าสู่ระบบในฐานะผู้ดูแลระบบรวมแล้ว'); return;
+  }
+  const lab=labs.find(l=>l.passwordHash===hash);
+  if(lab){
+    session={role:'lab',labId:lab.id}; saveSession(); currentLabId=lab.id; saveCurrentLab(); closeModal(); render(); toast(`เข้าสู่ระบบผู้ดูแล: ${lab.name}`); return;
+  }
+  document.getElementById('loginError').textContent='รหัสผ่านไม่ถูกต้อง';
+}
+function closeModal(){ document.getElementById('modalBg').classList.remove('open'); document.getElementById('modalBody').classList.remove('narrow'); }
+
+/* =========================================================
+   MODAL — ADD / EDIT ASSET
+========================================================= */
+function openAssetModal(id){
+  const a=id?assets.find(x=>x.id===id):null;
+  if(a && !canEditLab(a.lab_id)){ toast('คุณไม่มีสิทธิ์แก้ไขห้องปฏิบัติการนี้'); return; }
+  if(!a && !canEditCurrentScope()){ toast('คุณไม่มีสิทธิ์เพิ่มเครื่องในห้องนี้'); return; }
+  const editing=!!a;
+  const defaultLabId = editing ? a.lab_id : (currentLabId!=='ALL'?currentLabId:(session.role==='lab'?session.labId:labs[0].id));
+  const labSelectHtml = session.role==='master'
+    ? `<select id="f_lab_id">${labs.map(l=>`<option value="${l.id}" ${defaultLabId===l.id?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}</select>`
+    : `<input type="text" value="${escapeAttr(getLab(defaultLabId)?.name||'')}" disabled><input type="hidden" id="f_lab_id" value="${defaultLabId}">`;
+
+  document.getElementById('modalBody').innerHTML=`
+    <h3>${editing?'แก้ไขเครื่อง UPS':'เพิ่มเครื่อง UPS ใหม่'}</h3>
+    <p class="modal-sub">${editing?`Asset ID: <span class="mono">${a.asset_id}</span>`:'กรอกข้อมูลตามแบบฟอร์ม Summary for Thermography Inspection'}</p>
+
+    <div class="form-section-title">ข้อมูลทั่วไป</div>
+    <div class="form-grid">
+      <div class="form-field"><label>Asset ID *</label><input id="f_asset_id" value="${editing?escapeAttr(a.asset_id):''}" placeholder="UPS-LAB-003"></div>
+      <div class="form-field"><label>ห้องปฏิบัติการ</label>${labSelectHtml}</div>
+      <div class="form-field"><label>ชั้น</label><input id="f_floor" value="${editing?escapeAttr(a.floor):''}"></div>
+      <div class="form-field span2"><label>สถานที่ / จุดติดตั้ง</label><input id="f_location" value="${editing?escapeAttr(a.location):''}"></div>
+      <div class="form-field"><label>โหลดจ่ายใช้งาน</label><input id="f_load" value="${editing?escapeAttr(a.load_va):''}" placeholder="2 kVA"></div>
+      <div class="form-field"><label>ยี่ห้อ UPS</label><input id="f_brand" value="${editing?escapeAttr(a.brand):''}"></div>
+      <div class="form-field"><label>ขนาด UPS (Rating)</label><input id="f_rating" value="${editing?escapeAttr(a.ups_rating):''}" placeholder="72 Vdc"></div>
+      <div class="form-field span2"><label>หมายเลขเครื่อง (Serial)</label><input id="f_serial" class="mono" value="${editing?escapeAttr(a.serial_number):''}"></div>
+    </div>
+
+    <div class="form-section-title">สัญญาบำรุงรักษา (ติดต่อนัด MA และเปลี่ยนแบต)</div>
+    <div class="form-grid">
+      <div class="form-field"><label>สัญญา</label><input id="f_contract" value="${editing?escapeAttr(a.contract):''}" placeholder="เลขที่สัญญา / รายละเอียดสัญญา"></div>
+      <div class="form-field"><label>บริษัท</label><input id="f_contract_company" value="${editing?escapeAttr(a.contract_company):''}"></div>
+      <div class="form-field"><label>ผู้รับผิดชอบ (บริษัท)</label><input id="f_contract_contact_name" value="${editing?escapeAttr(a.contract_contact_name):''}"></div>
+      <div class="form-field"><label>Email ผู้รับผิดชอบ</label><input type="email" id="f_contract_contact_email" value="${editing?escapeAttr(a.contract_contact_email):''}"></div>
+    </div>
+
+    <div class="form-section-title">อายุการใช้งาน</div>
+    <div class="form-grid">
+      <div class="form-field"><label>ปีที่ติดตั้ง / วันที่ติดตั้ง</label><input id="f_install" value="${editing?escapeAttr(a.install_year_text):''}" placeholder="2567 หรือ 13/12/2566"></div>
+      <div class="form-field"><label>ระยะเวลาการใช้งาน (ปี)</label><input id="f_duration" value="${editing?escapeAttr(a.duration_years):''}"></div>
+      <div class="form-field"><label>ประมาณการอายุการใช้งาน (ปี)</label><input id="f_lifespan" value="${editing?escapeAttr(a.estimated_lifespan):''}"></div>
+    </div>
+
+    <div class="form-section-title">แบตเตอรี่</div>
+    <div class="form-grid">
+      <div class="form-field"><label>ขนาดแบตเตอรี่</label><input id="f_batt_size" value="${editing?escapeAttr(a.battery_size):''}" placeholder="13A"></div>
+      <div class="form-field"><label>จำนวน</label><input id="f_batt_qty" value="${editing?escapeAttr(a.battery_qty):''}"></div>
+      <div class="form-field"><label>สถานะความเสี่ยง</label>
+        <select id="f_risk">
+          <option value="green" ${editing&&a.risk_status==='green'?'selected':''}>🟢 ปกติ</option>
+          <option value="yellow" ${editing&&a.risk_status==='yellow'?'selected':''}>🟡 เฝ้าระวัง</option>
+          <option value="red" ${editing&&a.risk_status==='red'?'selected':''}>🔴 วิกฤต / บวม</option>
+        </select>
+      </div>
+      <div class="form-field"><label>วันที่เปลี่ยนแบตล่าสุด</label><input type="date" id="f_battery_date" value="${editing?a.last_battery_date||'':''}"></div>
+      <div class="form-field"><label>วันที่เปลี่ยนแบตครั้งต่อไป</label><input type="date" id="f_next_battery" value="${editing?a.next_battery_date||'':''}">
+        <button type="button" class="inline-btn" id="btnAutoCalc">คำนวณอัตโนมัติ (+2 ปีจากวันที่เปลี่ยนล่าสุด)</button>
+      </div>
+      <div class="form-field"><label>กำหนดบำรุงรักษาประจำปี (MA)</label><input type="date" id="f_ma" value="${editing?a.next_ma_date||'':''}"></div>
+    </div>
+
+    <div class="form-section-title">Checklist การทำ MA (ครั้งล่าสุด)</div>
+    <p class="helptext" style="margin:-4px 0 10px;">ติ๊กผลตรวจแต่ละหัวข้อ — ถ้า “ไม่ผ่าน” กรุณาระบุเหตุผล/สิ่งที่พบ</p>
+    <div class="ma-checklist">
+      ${MA_CHECKLIST_ITEMS.map(item=>{
+        const rec=(editing && a.ma_checklist && a.ma_checklist[item.id]) || {result:'', reason:''};
+        return `
+        <div class="ma-check-row" data-check-row="${item.id}">
+          <div class="ma-check-label">${escapeHtml(item.label)}</div>
+          <select data-check-result="${item.id}" class="ma-check-select">
+            <option value="" ${rec.result===''?'selected':''}>ยังไม่ตรวจ</option>
+            <option value="pass" ${rec.result==='pass'?'selected':''}>✅ ผ่าน</option>
+            <option value="fail" ${rec.result==='fail'?'selected':''}>❌ ไม่ผ่าน</option>
+          </select>
+          <input type="text" data-check-reason="${item.id}" class="ma-check-reason" placeholder="เหตุผล / สิ่งที่พบ (กรณีไม่ผ่าน)" value="${escapeAttr(rec.reason)}">
+        </div>`;
+      }).join('')}
+    </div>
+
+    <div class="form-section-title">ผู้รับผิดชอบ &amp; ตำแหน่งบนแผนที่</div>
+    <div class="form-grid">
+      <div class="form-field"><label>ชื่อผู้รับผิดชอบ</label><input id="f_resp_name" value="${editing?escapeAttr(a.responsible_name):''}"></div>
+      <div class="form-field"><label>อีเมลผู้รับผิดชอบ</label><input type="email" id="f_resp_email" value="${editing?escapeAttr(a.responsible_email):''}"></div>
+      <div class="form-field"></div>
+      <div class="form-field"><label>ตำแหน่ง X บนแผนที่ (0–100)</label><input type="number" min="0" max="100" id="f_x" value="${editing?a.x:50}"></div>
+      <div class="form-field"><label>ตำแหน่ง Y บนแผนที่ (0–100)</label><input type="number" min="0" max="100" id="f_y" value="${editing?a.y:50}"></div>
+      <div class="form-field"></div>
+      <div class="form-field full"><label>หมายเหตุ</label><textarea id="f_notes" rows="2">${editing?escapeHtml(a.notes||''):''}</textarea></div>
+    </div>
+
+    <div class="modal-foot">
+      <button class="btn" id="btnCancelModal">ยกเลิก</button>
+      <button class="btn btn-primary" id="btnSaveModal">${editing?'บันทึกการแก้ไข':'เพิ่มเครื่อง'}</button>
+    </div>`;
+  document.getElementById('modalBg').classList.add('open');
+  document.getElementById('btnCancelModal').onclick=closeModal;
+  document.getElementById('btnSaveModal').onclick=()=>saveAssetFromModal(id);
+  document.getElementById('btnAutoCalc').onclick=()=>{
+    const base=document.getElementById('f_battery_date').value;
+    if(!base){ toast('กรุณาระบุวันที่เปลี่ยนแบตล่าสุดก่อน'); return; }
+    document.getElementById('f_next_battery').value=addYearsISO(base,2);
+  };
+  document.querySelectorAll('.ma-check-select').forEach(sel=>{
+    const row=sel.closest('.ma-check-row');
+    const applyHighlight=()=>row.classList.toggle('is-fail', sel.value==='fail');
+    applyHighlight();
+    sel.addEventListener('change', applyHighlight);
+  });
+}
+function gatherMaChecklist(){
+  const result={};
+  MA_CHECKLIST_ITEMS.forEach(item=>{
+    const sel=document.querySelector(`[data-check-result="${item.id}"]`);
+    const reasonInput=document.querySelector(`[data-check-reason="${item.id}"]`);
+    const res=sel?sel.value:'';
+    const reason=reasonInput?reasonInput.value.trim():'';
+    if(res || reason) result[item.id]={result:res, reason};
+  });
+  return result;
+}
+function saveAssetFromModal(id){
+  const assetIdVal=document.getElementById('f_asset_id').value.trim();
+  if(!assetIdVal){ toast('กรุณากรอก Asset ID'); return; }
+  const dup=assets.find(x=>x.asset_id===assetIdVal && x.id!==id);
+  if(dup){ toast('Asset ID นี้มีอยู่แล้วในระบบ'); return; }
+  const labIdVal=document.getElementById('f_lab_id').value;
+  if(!canEditLab(labIdVal)){ toast('คุณไม่มีสิทธิ์บันทึกข้อมูลของห้องนี้'); return; }
+
+  const data={
+    asset_id:assetIdVal, lab_id:labIdVal,
+    floor:document.getElementById('f_floor').value.trim(),
+    location:document.getElementById('f_location').value.trim(),
+    load_va:document.getElementById('f_load').value.trim(),
+    brand:document.getElementById('f_brand').value.trim(),
+    ups_rating:document.getElementById('f_rating').value.trim(),
+    serial_number:document.getElementById('f_serial').value.trim(),
+    contract:document.getElementById('f_contract').value.trim(),
+    contract_company:document.getElementById('f_contract_company').value.trim(),
+    contract_contact_name:document.getElementById('f_contract_contact_name').value.trim(),
+    contract_contact_email:document.getElementById('f_contract_contact_email').value.trim(),
+    install_year_text:document.getElementById('f_install').value.trim(),
+    duration_years:document.getElementById('f_duration').value.trim(),
+    estimated_lifespan:document.getElementById('f_lifespan').value.trim(),
+    battery_size:document.getElementById('f_batt_size').value.trim(),
+    battery_qty:document.getElementById('f_batt_qty').value.trim(),
+    risk_status:document.getElementById('f_risk').value,
+    last_battery_date:document.getElementById('f_battery_date').value||null,
+    next_battery_date:document.getElementById('f_next_battery').value||null,
+    next_ma_date:document.getElementById('f_ma').value||null,
+    ma_checklist: gatherMaChecklist(),
+    responsible_name:document.getElementById('f_resp_name').value.trim(),
+    responsible_email:document.getElementById('f_resp_email').value.trim(),
+    x:clamp(Number(document.getElementById('f_x').value)||50,0,100),
+    y:clamp(Number(document.getElementById('f_y').value)||50,0,100),
+    notes:document.getElementById('f_notes').value.trim(),
+  };
+  saveAssetToFirestore(id, assetIdVal, data);
+}
+async function saveAssetToFirestore(id, assetIdVal, data){
+  try{
+    if(id){
+      if(assetIdVal!==id){
+        // Asset ID changed — Firestore doc IDs are immutable, so move to a new doc.
+        const original=assets.find(x=>x.id===id)||{};
+        const merged=Object.assign({}, original, data);
+        delete merged.id;
+        await db.collection(FS.assets).doc(id).delete();
+        await db.collection(FS.assets).doc(assetIdVal).set(merged);
+      } else {
+        await db.collection(FS.assets).doc(id).update(data);
+      }
+      toast('บันทึกการแก้ไขเรียบร้อย');
+    } else {
+      await db.collection(FS.assets).doc(assetIdVal).set({ acknowledge_status:'Pending', acknowledge_timestamp:null, ...data });
+      toast('เพิ่มเครื่อง UPS เรียบร้อย');
+    }
+    closeModal();
+  }catch(e){ console.error(e); toast('บันทึกไม่สำเร็จ — ตรวจสอบการเชื่อมต่อฐานข้อมูล'); }
+}
+function clamp(n,min,max){ return Math.max(min,Math.min(max,n)); }
+
+/* =========================================================
+   QR CODE
+========================================================= */
+function qrValueFor(a){
+  const base=(settings.qrBaseUrl||'').trim() || (location.origin+location.pathname);
+  return base+'#asset='+encodeURIComponent(a.asset_id);
+}
+function renderQrThumbnails(){
+  document.querySelectorAll('[data-qr-thumb]').forEach(el=>{
+    const a=assets.find(x=>x.id===el.dataset.qrThumb);
+    if(!a||typeof QRCode==='undefined') return;
+    el.innerHTML='';
+    new QRCode(el,{text:qrValueFor(a),width:40,height:40,correctLevel:QRCode.CorrectLevel.M});
+  });
+}
+function openQrModal(id){
+  const a=assets.find(x=>x.id===id); if(!a) return;
+  document.getElementById('modalBody').innerHTML=`
+    <h3>QR Code — ${a.asset_id}</h3>
+    <p class="modal-sub">สแกนเพื่อเปิดหน้าเครื่องนี้โดยตรง (แก้ไขได้เฉพาะผู้ที่ล็อกอินสิทธิ์ห้อง “${escapeHtml(getLab(a.lab_id)?.name||'')}” หรือผู้ดูแลระบบรวม)</p>
+    <div class="qr-print-area"><div class="qr-box"><div id="qrDetailBox"></div><b>${a.asset_id}</b><span>${escapeHtml(a.location)}</span></div></div>
+    <p class="helptext mono" style="word-break:break-all;">${escapeHtml(qrValueFor(a))}</p>
+    <div class="modal-foot"><button class="btn" id="btnCloseQr">ปิด</button><button class="btn btn-primary" id="btnPrintOneQr">🖨️ พิมพ์ QR นี้</button></div>`;
+  document.getElementById('modalBg').classList.add('open');
+  new QRCode(document.getElementById('qrDetailBox'),{text:qrValueFor(a),width:180,height:180,correctLevel:QRCode.CorrectLevel.M});
+  document.getElementById('btnCloseQr').onclick=closeModal;
+  document.getElementById('btnPrintOneQr').onclick=()=>printQrLabels([a.id]);
+}
+function printQrLabels(ids){
+  const sheet=document.getElementById('qrPrintSheet');
+  sheet.innerHTML=ids.map(id=>{
+    const a=assets.find(x=>x.id===id); if(!a) return '';
+    return `<div style="display:inline-block;text-align:center;border:1px solid #ccc;border-radius:8px;padding:14px 18px;margin:8px;">
+      <div id="qrp_${a.id}"></div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:13px;margin-top:6px;">${escapeHtml(a.asset_id)}</div>
+      <div style="font-size:11px;color:#555;">${escapeHtml(a.location)}</div>
+    </div>`;
+  }).join('');
+  ids.forEach(id=>{ const a=assets.find(x=>x.id===id); if(!a) return; const el=document.getElementById('qrp_'+a.id); if(el) new QRCode(el,{text:qrValueFor(a),width:120,height:120,correctLevel:QRCode.CorrectLevel.M}); });
+  setTimeout(()=>window.print(),150);
+}
+function handleHashRoute(){
+  const m=location.hash.match(/asset=([^&]+)/);
+  if(!m) return;
+  const assetId=decodeURIComponent(m[1]);
+  const a=assets.find(x=>x.asset_id===assetId);
+  if(!a) return;
+  currentLabId=a.lab_id; saveCurrentLab(); currentView='assets'; render();
+  if(canEditLab(a.lab_id)) openAssetModal(a.id);
+  else { selectedAssetId=a.id; currentView='dashboard'; render(); toast('เข้าสู่ระบบผู้ดูแลห้องนี้เพื่อแก้ไขข้อมูลเครื่องนี้'); }
+}
+
+/* =========================================================
+   EXCEL EXPORT (SheetJS)
+========================================================= */
+function exportSelectedToExcel(){
+  const rows=assets.filter(a=>selectedIds.has(a.id));
+  if(!rows.length){ toast('กรุณาเลือกอย่างน้อย 1 รายการ'); return; }
+  const header=['ลำดับ','ห้องปฏิบัติการ','Asset ID','ชั้น','สถานที่','โหลดจ่ายใช้งาน','ยี่ห้อ UPS','ขนาด UPS (Rating)','หมายเลขเครื่อง','สัญญา','บริษัท','ผู้รับผิดชอบ (บริษัท)','Email ผู้รับผิดชอบ','ปีที่ติดตั้ง','ระยะเวลาการใช้งาน','ประมาณการอายุการใช้งาน','แบตเตอรี่ ขนาด','แบตเตอรี่ จำนวน','วันที่เปลี่ยนแบต','วันที่เปลี่ยนครั้งต่อไป','กำหนด MA ถัดไป','ผลตรวจ MA (ผ่าน/ไม่ผ่าน/ยังไม่ตรวจ)','รายการที่ไม่ผ่าน + เหตุผล','สถานะความเสี่ยง','ผู้รับผิดชอบ','หมายเหตุ'];
+  const data=rows.map((a,i)=>{
+    const s=maChecklistStats(a);
+    const fails=MA_CHECKLIST_ITEMS.filter(item=>a.ma_checklist?.[item.id]?.result==='fail')
+      .map(item=>`${item.label}: ${a.ma_checklist[item.id].reason||'(ไม่ระบุเหตุผล)'}`).join(' | ');
+    return [i+1, getLab(a.lab_id)?.name||a.lab_id, a.asset_id, a.floor, a.location, a.load_va, a.brand, a.ups_rating, a.serial_number,
+    a.contract, a.contract_company, a.contract_contact_name, a.contract_contact_email, a.install_year_text, a.duration_years, a.estimated_lifespan, a.battery_size, a.battery_qty,
+    fmtDate(a.last_battery_date), fmtDate(nextBatteryDue(a)), fmtDate(a.next_ma_date), `${s.pass}/${s.fail}/${s.unchecked}`, fails, RISK_LABEL[a.risk_status], a.responsible_name, a.notes];
+  });
+  const wsData=[['Summary for Thermography Inspection'],[], header, ...data];
+  const ws=XLSX.utils.aoa_to_sheet(wsData);
+  ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:header.length-1}}];
+  ws['!cols']=header.map(h=>({wch: h.length>14?22:14}));
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'UPS Register');
+  XLSX.writeFile(wb, `ups_register_${new Date().toISOString().slice(0,10)}.xlsx`);
+  toast(`ส่งออก ${rows.length} รายการเป็น Excel แล้ว`);
+}
+
+/* =========================================================
+   EVENT WIRING
+========================================================= */
+function afterRender(){
+  const canvas=document.getElementById('mapCanvas');
+  if(canvas){
+    getScopedAssets().forEach(a=>{
+      const editable=canEditLab(a.lab_id);
+      const pin=document.createElement('div');
+      pin.className='pin'+(editable?' draggable':'')+(a.id===selectedAssetId?' selected':'');
+      pin.style.left=a.x+'%'; pin.style.top=a.y+'%'; pin.style.background=RISK_COLOR[a.risk_status];
+      pin.innerHTML=`<span class="pin-tag">${a.asset_id}</span>`;
+      pin.addEventListener('click',()=>{ if(pin.dataset.dragged==='1'){pin.dataset.dragged='0'; return;} selectedAssetId=a.id; render(); });
+      if(editable){
+        pin.addEventListener('mousedown',(e)=>startDrag(e,pin,a));
+        pin.addEventListener('touchstart',(e)=>startDrag(e,pin,a),{passive:false});
+      }
+      canvas.appendChild(pin);
+    });
+  }
+
+  document.getElementById('btnAddFromDash')?.addEventListener('click',()=>openAssetModal(null));
+  document.getElementById('btnAddFromTable')?.addEventListener('click',()=>openAssetModal(null));
+  document.getElementById('btnLoginFromSettings')?.addEventListener('click',openLoginModal);
+  document.getElementById('btnGoContacts')?.addEventListener('click',()=>{ currentView='contacts'; render(); });
+  document.querySelectorAll('[data-goto-lab]').forEach(el=>el.addEventListener('click',()=>{ currentLabId=el.dataset.gotoLab; saveCurrentLab(); render(); }));
+  document.querySelectorAll('[data-save-contact]').forEach(el=>el.addEventListener('click', async ()=>{
+    const labId=el.dataset.saveContact; const lab=getLab(labId);
+    if(!lab||!canEditLab(labId)){ toast('คุณไม่มีสิทธิ์แก้ไขห้องนี้'); return; }
+    const nameInput=document.querySelector(`[data-contact-name="${labId}"]`);
+    const phoneInput=document.querySelector(`[data-contact-phone="${labId}"]`);
+    const contact_name = nameInput ? nameInput.value.trim() : lab.contact_name;
+    const contact_phone = phoneInput ? phoneInput.value.trim() : lab.contact_phone;
+    try{ await db.collection(FS.labs).doc(labId).update({contact_name, contact_phone}); toast('บันทึกผู้รับผิดชอบห้องแล้ว'); }
+    catch(e){ toast('บันทึกไม่สำเร็จ'); }
+  }));
+
+  document.querySelectorAll('[data-edit]').forEach(el=>el.addEventListener('click',()=>openAssetModal(el.dataset.edit)));
+  document.querySelectorAll('[data-del]').forEach(el=>el.addEventListener('click', async ()=>{
+    const a=assets.find(x=>x.id===el.dataset.del);
+    if(!a||!canEditLab(a.lab_id)){ toast('คุณไม่มีสิทธิ์ลบเครื่องนี้'); return; }
+    if(confirm('ยืนยันการลบเครื่อง UPS นี้ออกจากทะเบียน?')){
+      try{
+        await db.collection(FS.assets).doc(a.id).delete();
+        selectedIds.delete(a.id);
+        if(selectedAssetId===a.id) selectedAssetId=null;
+        toast('ลบเครื่องเรียบร้อย');
+      }catch(e){ toast('ลบไม่สำเร็จ'); }
+    }
+  }));
+  document.querySelectorAll('[data-view-in-table]').forEach(el=>el.addEventListener('click',()=>{ currentView='assets'; render(); }));
+  document.querySelectorAll('[data-showqr]').forEach(el=>el.addEventListener('click',()=>openQrModal(el.dataset.showqr)));
+  document.querySelectorAll('[data-ack]').forEach(el=>el.addEventListener('click', async ()=>{
+    const a=assets.find(x=>x.id===el.dataset.ack);
+    if(!a||!canEditLab(a.lab_id)){ toast('คุณไม่มีสิทธิ์แก้ไขห้องนี้'); return; }
+    try{
+      await db.collection(FS.assets).doc(a.id).update({ acknowledge_status:'Acknowledged', acknowledge_timestamp:new Date().toISOString() });
+      toast('บันทึกการรับทราบและเวลาแล้ว');
+    }catch(e){ toast('บันทึกไม่สำเร็จ'); }
+  }));
+
+  document.querySelectorAll('.rowChk').forEach(chk=>chk.addEventListener('change',()=>{
+    if(chk.checked) selectedIds.add(chk.dataset.id); else selectedIds.delete(chk.dataset.id);
+    render();
+  }));
+  function bindSelectAll(elId){
+    document.getElementById(elId)?.addEventListener('change',(e)=>{
+      if(e.target.checked) getScopedAssets().forEach(a=>selectedIds.add(a.id)); else getScopedAssets().forEach(a=>selectedIds.delete(a.id));
+      render();
+    });
+  }
+  bindSelectAll('selectAllChk'); bindSelectAll('selectAllChk2');
+  document.getElementById('btnExportExcel')?.addEventListener('click', exportSelectedToExcel);
+  document.getElementById('btnPrintQrSelected')?.addEventListener('click', ()=>printQrLabels([...selectedIds]));
+
+  // Settings: lab-specific
+  const mapDrop=document.getElementById('mapDrop'), mapFileInput=document.getElementById('mapFileInput');
+  mapDrop?.addEventListener('click',()=>mapFileInput.click());
+  mapFileInput?.addEventListener('change', async (e)=>{
+    const file=e.target.files[0]; if(!file) return;
+    try{
+      const dataUrl=await resizeImageDataUrl(file);
+      if(dataUrl.length>900000){ toast('ไฟล์ภาพยังใหญ่เกินไปแม้ย่อแล้ว กรุณาเลือกภาพที่มีรายละเอียดน้อยกว่านี้'); return; }
+      await db.collection(FS.mapBgs).doc(currentLabId).set({dataUrl, name:file.name});
+      toast('อัปโหลดผังห้องเรียบร้อย');
+    }catch(err){ console.error(err); toast('อัปโหลดไม่สำเร็จ'); }
+  });
+  document.getElementById('btnClearMap')?.addEventListener('click', async ()=>{
+    try{ await db.collection(FS.mapBgs).doc(currentLabId).delete(); toast('ลบผังห้องแล้ว'); }
+    catch(e){ toast('ลบไม่สำเร็จ'); }
+  });
+
+  document.getElementById('btnSaveLabPw')?.addEventListener('click', async ()=>{
+    const pw=document.getElementById('f_lab_pw').value;
+    if(!pw||pw.length<4){ toast('กรุณาตั้งรหัสผ่านอย่างน้อย 4 ตัวอักษร'); return; }
+    try{ await db.collection(FS.labs).doc(currentLabId).update({passwordHash: await sha256(pw)}); toast('เปลี่ยนรหัสผ่านห้องนี้แล้ว'); }
+    catch(e){ toast('บันทึกไม่สำเร็จ'); }
+  });
+
+  document.getElementById('btnExportJson')?.addEventListener('click',()=>{
+    const rows=currentLabId==='ALL'?assets:assets.filter(a=>a.lab_id===currentLabId);
+    const blob=new Blob([JSON.stringify({assets:rows,exported_at:new Date().toISOString()},null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=url; a.download=`ups_backup_${currentLabId}_${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url);
+    toast('ดาวน์โหลดไฟล์สำรองแล้ว');
+  });
+  document.getElementById('btnExportAllJson')?.addEventListener('click',()=>{
+    const blob=new Blob([JSON.stringify({assets,labs,exported_at:new Date().toISOString()},null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=url; a.download=`ups_backup_ALL_${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url);
+    toast('ดาวน์โหลดไฟล์สำรองทุกห้องแล้ว');
+  });
+  const importInput=document.getElementById('importFileInput');
+  document.getElementById('btnImport')?.addEventListener('click',()=>importInput.click());
+  importInput?.addEventListener('change',(e)=>{
+    const file=e.target.files[0]; if(!file) return;
+    const reader=new FileReader();
+    reader.onload=async ()=>{
+      try{
+        const parsed=JSON.parse(reader.result);
+        if(!Array.isArray(parsed.assets)){ toast('รูปแบบไฟล์ไม่ถูกต้อง'); return; }
+        const oldDocs=await db.collection(FS.assets).where('lab_id','==',currentLabId).get();
+        const batch=db.batch();
+        oldDocs.forEach(d=>batch.delete(d.ref));
+        parsed.assets.forEach(a=>{
+          const { id, ...rest }=a;
+          const docId=a.asset_id || ('a_'+Math.random().toString(36).slice(2,10));
+          batch.set(db.collection(FS.assets).doc(docId), {...rest, lab_id:currentLabId});
+        });
+        await batch.commit();
+        selectedIds.clear(); toast('นำเข้าข้อมูลห้องนี้เรียบร้อย');
+      }catch(err){ console.error(err); toast('ไม่สามารถอ่านไฟล์ได้'); }
+    };
+    reader.readAsText(file);
+  });
+  document.getElementById('btnResetLab')?.addEventListener('click', async ()=>{
+    if(confirm(`ยืนยันการล้างข้อมูลของห้อง “${getLab(currentLabId)?.name}” ทั้งหมด? การกระทำนี้ย้อนกลับไม่ได้`)){
+      try{
+        const snap=await db.collection(FS.assets).where('lab_id','==',currentLabId).get();
+        const batch=db.batch();
+        snap.forEach(d=>batch.delete(d.ref));
+        await batch.commit();
+        selectedAssetId=null; selectedIds.clear(); toast('ล้างข้อมูลห้องนี้แล้ว');
+      }catch(e){ toast('ล้างข้อมูลไม่สำเร็จ'); }
+    }
+  });
+
+  // Settings: master-only
+  document.getElementById('btnSaveQrBase')?.addEventListener('click', async ()=>{
+    try{ await db.collection(FS.settings).doc(SETTINGS_DOC_ID).set({qrBaseUrl:document.getElementById('f_qr_base').value.trim()},{merge:true}); toast('บันทึก URL สำหรับ QR แล้ว'); }
+    catch(e){ toast('บันทึกไม่สำเร็จ'); }
+  });
+  document.getElementById('btnSaveMasterPw')?.addEventListener('click', async ()=>{
+    const pw=document.getElementById('f_master_pw').value;
+    if(!pw||pw.length<4){ toast('กรุณาตั้งรหัสผ่านอย่างน้อย 4 ตัวอักษร'); return; }
+    try{ await db.collection(FS.settings).doc(SETTINGS_DOC_ID).set({masterPasswordHash: await sha256(pw)},{merge:true}); toast('เปลี่ยนรหัสผ่านผู้ดูแลระบบรวมแล้ว'); }
+    catch(e){ toast('บันทึกไม่สำเร็จ'); }
+  });
+  document.querySelectorAll('[data-save-lab]').forEach(btn=>btn.addEventListener('click', async ()=>{
+    const labId=btn.dataset.saveLab;
+    const newName=document.querySelector(`[data-lab-name="${labId}"]`).value.trim();
+    const newPw=document.querySelector(`[data-lab-newpw="${labId}"]`).value;
+    const updates={};
+    if(newName) updates.name=newName;
+    if(newPw){ if(newPw.length<4){ toast('รหัสผ่านต้องมีอย่างน้อย 4 ตัวอักษร'); return; } updates.passwordHash=await sha256(newPw); }
+    if(!Object.keys(updates).length) return;
+    try{ await db.collection(FS.labs).doc(labId).update(updates); toast('บันทึกข้อมูลห้องแล้ว'); }
+    catch(e){ toast('บันทึกไม่สำเร็จ'); }
+  }));
+  document.querySelectorAll('[data-del-lab]').forEach(btn=>btn.addEventListener('click', async ()=>{
+    const labId=btn.dataset.delLab; const lab=getLab(labId);
+    const count=assets.filter(a=>a.lab_id===labId).length;
+    if(!confirm(`ยืนยันลบห้อง “${lab.name}”? ${count?`มีเครื่อง UPS ${count} รายการในห้องนี้จะถูกลบไปด้วย`:''} การกระทำนี้ย้อนกลับไม่ได้`)) return;
+    try{
+      const snap=await db.collection(FS.assets).where('lab_id','==',labId).get();
+      const batch=db.batch();
+      snap.forEach(d=>batch.delete(d.ref));
+      batch.delete(db.collection(FS.labs).doc(labId));
+      batch.delete(db.collection(FS.mapBgs).doc(labId));
+      await batch.commit();
+      if(currentLabId===labId){ currentLabId=labs.find(l=>l.id!==labId)?.id||null; saveCurrentLab(); }
+      toast('ลบห้องปฏิบัติการแล้ว');
+    }catch(e){ toast('ลบไม่สำเร็จ'); }
+  }));
+  document.getElementById('btnAddLab')?.addEventListener('click', async ()=>{
+    const name=document.getElementById('f_new_lab_name').value.trim();
+    if(!name){ toast('กรุณาระบุชื่อห้องปฏิบัติการ'); return; }
+    await addNewLab(name);
+    toast('เพิ่มห้องปฏิบัติการแล้ว (รหัสผ่านเริ่มต้น: lab-2569)');
+  });
+
+  renderQrThumbnails();
+}
+
+function startDrag(e,pin,asset){
+  e.preventDefault();
+  const canvas=document.getElementById('mapCanvas'); const rect=canvas.getBoundingClientRect();
+  pin.dataset.dragged='0';
+  function move(ev){
+    pin.dataset.dragged='1';
+    const point=ev.touches?ev.touches[0]:ev;
+    let x=((point.clientX-rect.left)/rect.width)*100, y=((point.clientY-rect.top)/rect.height)*100;
+    x=clamp(x,0,100); y=clamp(y,0,100);
+    pin.style.left=x+'%'; pin.style.top=y+'%';
+    asset._pendingX=x; asset._pendingY=y;
+  }
+  function up(){
+    if(asset._pendingX!==undefined){
+      const nx=Math.round(asset._pendingX), ny=Math.round(asset._pendingY);
+      delete asset._pendingX; delete asset._pendingY;
+      db.collection(FS.assets).doc(asset.id).update({x:nx, y:ny}).catch(()=>toast('บันทึกตำแหน่งไม่สำเร็จ'));
+    }
+    document.removeEventListener('mousemove',move); document.removeEventListener('mouseup',up);
+    document.removeEventListener('touchmove',move); document.removeEventListener('touchend',up);
+  }
+  document.addEventListener('mousemove',move); document.addEventListener('mouseup',up);
+  document.addEventListener('touchmove',move,{passive:false}); document.addEventListener('touchend',up);
+}
+
+/* Downscale + compress an uploaded floor-plan image client-side before
+   storing it as a Firestore document (1 MiB per-document limit). */
+function resizeImageDataUrl(file, maxDim=1600, quality=0.72){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>{
+      const img=new Image();
+      img.onload=()=>{
+        let {width,height}=img;
+        if(width>maxDim||height>maxDim){
+          const scale=maxDim/Math.max(width,height);
+          width=Math.round(width*scale); height=Math.round(height*scale);
+        }
+        const canvas=document.createElement('canvas');
+        canvas.width=width; canvas.height=height;
+        canvas.getContext('2d').drawImage(img,0,0,width,height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror=reject;
+      img.src=reader.result;
+    };
+    reader.onerror=reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/* =========================================================
+   UTIL
+========================================================= */
+function escapeHtml(str){ if(str===undefined||str===null) return ''; return String(str).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+function escapeAttr(str){ return escapeHtml(str); }
+let toastTimer;
+function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),2800); }
+
+/* =========================================================
+   INIT
+========================================================= */
+async function initApp(){
+  loadLocalOnly();
+  render(); // shows the "connecting..." loading state immediately
+  try{
+    firebase.initializeApp(firebaseConfig);
+    db=firebase.firestore();
+    await seedIfNeeded();
+    attachListeners();
+  }catch(e){
+    console.error(e);
+    document.getElementById('main').innerHTML = `<div class="callout red"><b>เชื่อมต่อฐานข้อมูลไม่สำเร็จ</b><br>
+      กรุณาตรวจสอบว่าใส่ค่า <span class="mono">firebaseConfig</span> ถูกต้องแล้ว และเปิดใช้งาน Firestore ในโปรเจกต์ Firebase แล้ว
+      (ดูคำแนะนำในคู่มือ setup ที่แนบมา)<br><span class="mono" style="font-size:11px;">${escapeHtml(e.message||String(e))}</span></div>`;
+  }
+}
+window.addEventListener('hashchange', handleHashRoute);
+initApp();
+</script>
+</body>
+</html>
