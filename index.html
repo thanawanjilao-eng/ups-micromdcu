@@ -207,7 +207,7 @@
     <div class="brand">
       <p class="eyebrow">Equipment Registry</p>
       <h1>ระบบบริหารจัดการ UPS</h1>
-      <div class="sub">ภาควิชาจุลชีววิทยา · รพ.จุฬาลงกรณ์ สภากาชาดไทย</div>
+      <div class="sub">ฝ่ายจุลชีววิทยา · รพ.จุฬาลงกรณ์ สภากาชาดไทย</div>
     </div>
     <div class="lab-switch">
       <label>ห้องปฏิบัติการที่กำลังดู</label>
@@ -241,7 +241,7 @@ const firebaseConfig = {
   appId: "1:442022652746:web:41b69ff3bdad34f101efb3",
   measurementId: "G-ND8MLSE6QJ"
 };
-const FS={ assets:'assets', labs:'labs', mapBgs:'map_backgrounds', settings:'app_settings' };
+const FS={ assets:'assets', labs:'labs', mapBgs:'map_backgrounds', settings:'app_settings', tickets:'repair_tickets' };
 const SETTINGS_DOC_ID='main';
 let db=null;
 let hashRouteHandled=false;
@@ -252,6 +252,7 @@ const CURLAB_KEY='ups_mgmt_current_lab_v1';
 let assets=[];
 let labs=[];
 let mapBgs={};
+let tickets=[];
 let settings={ qrBaseUrl:'', masterPasswordHash:null };
 let session={ role:'public' };
 let currentLabId=null;
@@ -319,7 +320,7 @@ async function seedIfNeeded(){
   const labBatch=db.batch();
   for(const l of DEFAULT_LABS){
     const hash=await sha256(l.defaultPw);
-    labBatch.set(db.collection(FS.labs).doc(l.id), { name:l.name, passwordHash:hash, contact_name:'', contact_phone:'' });
+    labBatch.set(db.collection(FS.labs).doc(l.id), { name:l.name, passwordHash:hash, contact_name:'', contact_phone:'', contact_email:'', technicianCodeHash:null });
   }
   await labBatch.commit();
 
@@ -335,7 +336,7 @@ function attachListeners(){
   db.collection(FS.assets).onSnapshot(snap=>{
     assets=snap.docs.map(d=>Object.assign({
       lab_id:'lab1', contract:'', contract_company:'', contract_contact_name:'', contract_contact_email:'',
-      ma_checklist:{}, responsible_name:'', responsible_email:'',
+      ma_checklist:{}, responsible_name:'', responsible_email:'', last_ma_date:null,
       acknowledge_status:'Pending', acknowledge_timestamp:null
     }, d.data(), { id:d.id }));
     render();
@@ -343,7 +344,7 @@ function attachListeners(){
   }, err=>{ console.error(err); toast('เชื่อมต่อฐานข้อมูล (assets) ไม่สำเร็จ'); });
 
   db.collection(FS.labs).onSnapshot(snap=>{
-    labs=snap.docs.map(d=>Object.assign({ contact_name:'', contact_phone:'' }, d.data(), { id:d.id }));
+    labs=snap.docs.map(d=>Object.assign({ contact_name:'', contact_phone:'', contact_email:'', technicianCodeHash:null }, d.data(), { id:d.id }));
     if(!currentLabId) currentLabId = localStorage.getItem(CURLAB_KEY) || labs[0]?.id || null;
     if(currentLabId==='ALL' && session.role!=='master') currentLabId = labs[0]?.id || null;
     render();
@@ -359,6 +360,14 @@ function attachListeners(){
     if(doc.exists) settings=Object.assign({ qrBaseUrl:'', masterPasswordHash:null }, doc.data());
     render();
   });
+
+  db.collection(FS.tickets).onSnapshot(snap=>{
+    tickets=snap.docs.map(d=>Object.assign({
+      status:'รอดำเนินการ', reason:'', technician_notes:'', action_types:[],
+      pdf_name:'', pdf_data:'', pdf_link:'', completed_at:null
+    }, d.data(), { id:d.id }));
+    render();
+  }, err=>{ console.error(err); });
 }
 
 /* =========================================================
@@ -385,7 +394,7 @@ function seedAssets(){
       contract:contract_responsible, contract_company:'', contract_contact_name:'', contract_contact_email:'',
       install_year_text, duration_years, estimated_lifespan, battery_size, battery_qty,
       connected_device:'', start_date:null,
-      last_battery_date:last_battery_date||null, next_battery_date:next_battery_date||null, next_ma_date:null,
+      last_battery_date:last_battery_date||null, next_battery_date:next_battery_date||null, last_ma_date:null, next_ma_date:null,
       risk_status:'green', responsible_name:'', responsible_email:'',
       acknowledge_status:'Pending', acknowledge_timestamp:null, x, y, notes, ma_checklist:{} };
   }
@@ -398,6 +407,7 @@ function canEditLab(labId){ return session.role==='master' || (session.role==='l
 function canEditCurrentScope(){ return currentLabId==='ALL' ? session.role==='master' : canEditLab(currentLabId); }
 function getLab(id){ return labs.find(l=>l.id===id); }
 function getScopedAssets(){ return currentLabId==='ALL' ? assets : assets.filter(a=>a.lab_id===currentLabId); }
+function getScopedTickets(){ return currentLabId==='ALL' ? tickets : tickets.filter(t=>t.lab_id===currentLabId); }
 function roleLabel(){
   if(session.role==='master') return '🛡️ ผู้ดูแลระบบรวม (แก้ไขได้ทุกห้อง)';
   if(session.role==='lab') return `🔧 ผู้ดูแล: ${getLab(session.labId)?.name||session.labId}`;
@@ -408,12 +418,14 @@ function roleLabel(){
    DERIVED / RISK LOGIC
 ========================================================= */
 function addYearsISO(dateStr,n){ if(!dateStr) return null; const d=new Date(dateStr); d.setFullYear(d.getFullYear()+n); return d.toISOString().slice(0,10); }
+function addMonthsISO(dateStr,n){ if(!dateStr) return null; const d=new Date(dateStr); d.setMonth(d.getMonth()+n); return d.toISOString().slice(0,10); }
 function nextBatteryDue(a){ return a.next_battery_date || addYearsISO(a.last_battery_date,2); }
+function nextMaDue(a){ return a.next_ma_date || addMonthsISO(a.last_ma_date,4); }
 function daysUntil(dateStr){ if(!dateStr) return null; const t=new Date(); t.setHours(0,0,0,0); const d=new Date(dateStr); d.setHours(0,0,0,0); return Math.round((d-t)/86400000); }
 const RISK_LABEL={red:'วิกฤต / บวม',yellow:'เฝ้าระวัง',green:'ปกติ'};
 const RISK_COLOR={red:'var(--red)',yellow:'var(--yellow)',green:'var(--green)'};
 function batteryAlertLevel(a){ const d=daysUntil(nextBatteryDue(a)); if(d===null) return null; if(d<=30) return {days:d,overdue:d<0}; return null; }
-function maAlertLevel(a){ const d=daysUntil(a.next_ma_date); if(d===null) return null; if(d<=7) return {days:d,overdue:d<0}; return null; }
+function maAlertLevel(a){ const d=daysUntil(nextMaDue(a)); if(d===null) return null; if(d<=7) return {days:d,overdue:d<0}; return null; }
 function fmtDate(d){ if(!d) return '—'; const dt=new Date(d); return dt.toLocaleDateString('th-TH',{year:'numeric',month:'short',day:'numeric'}); }
 function fmtDateTime(d){ if(!d) return '—'; const dt=new Date(d); return dt.toLocaleDateString('th-TH',{year:'numeric',month:'short',day:'numeric'})+' '+dt.toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}); }
 
@@ -443,6 +455,7 @@ const NAV_ITEMS=[
   {id:'dashboard',label:'แผนที่ / แดชบอร์ด',icon:'🗺️'},
   {id:'assets',label:'รายการเครื่อง UPS',icon:'🗂️'},
   {id:'alerts',label:'แจ้งเตือน',icon:'🔔'},
+  {id:'tickets',label:'แจ้งซ่อม',icon:'🚨'},
   {id:'contacts',label:'ผู้รับผิดชอบห้อง',icon:'☎️'},
   {id:'knowledge',label:'ความรู้เกี่ยวกับ UPS',icon:'📘'},
   {id:'settings',label:'ตั้งค่า / ผู้ดูแลระบบ',icon:'⚙️'},
@@ -489,7 +502,7 @@ async function confirmQuickAddLab(){
 }
 async function addNewLab(name){
   const id='lab_'+Math.random().toString(36).slice(2,8);
-  const newLab={id, name, passwordHash: await sha256('lab-2569'), contact_name:'', contact_phone:''};
+  const newLab={id, name, passwordHash: await sha256('lab-2569'), contact_name:'', contact_phone:'', contact_email:'', technicianCodeHash:null};
   const { id:_drop, ...data }=newLab;
   await db.collection(FS.labs).doc(id).set(data);
   return newLab;
@@ -497,10 +510,12 @@ async function addNewLab(name){
 function renderNav(){
   const nav=document.getElementById('nav');
   const alertCount=countActiveAlerts();
+  const ticketCount=getScopedTickets().filter(t=>t.status==='รอดำเนินการ').length;
   nav.innerHTML=NAV_ITEMS.map(item=>`
     <button class="nav-btn ${currentView===item.id?'active':''}" data-view="${item.id}">
       <span class="lbl">${item.icon} ${item.label}</span>
       ${item.id==='alerts'&&alertCount>0?`<span class="nav-badge">${alertCount}</span>`:''}
+      ${item.id==='tickets'&&ticketCount>0?`<span class="nav-badge">${ticketCount}</span>`:''}
     </button>`).join('');
   nav.querySelectorAll('.nav-btn').forEach(btn=>btn.addEventListener('click',()=>{currentView=btn.dataset.view; render();}));
 
@@ -510,7 +525,7 @@ function renderNav(){
     document.getElementById('btnLogin').onclick=openLoginModal;
   } else {
     authPanel.innerHTML=`<div class="auth-role">${roleLabel()}</div><button class="auth-btn" id="btnLogout">ออกจากระบบ</button>`;
-    document.getElementById('btnLogout').onclick=()=>{ session={role:'public'}; saveSession(); if(currentLabId==='ALL') currentLabId=labs[0].id; render(); toast('ออกจากระบบแล้ว'); };
+    document.getElementById('btnLogout').onclick=()=>{ session={role:'public'}; saveSession(); if(currentLabId==='ALL') currentLabId=labs[0]?.id||null; render(); toast('ออกจากระบบแล้ว'); };
   }
 }
 function countActiveAlerts(){
@@ -525,6 +540,7 @@ function render(){
   if(currentView==='dashboard') main.innerHTML = currentLabId==='ALL' ? viewAllLabsDashboard() : viewDashboard();
   else if(currentView==='assets') main.innerHTML=viewAssets();
   else if(currentView==='alerts') main.innerHTML=viewAlerts();
+  else if(currentView==='tickets') main.innerHTML=viewTickets();
   else if(currentView==='contacts') main.innerHTML=viewContacts();
   else if(currentView==='knowledge') main.innerHTML=viewKnowledge();
   else if(currentView==='settings') main.innerHTML=viewSettings();
@@ -605,28 +621,32 @@ function renderDetailCard(){
   if(!a) return `<div class="detail-empty">เลือกหมุดบนแผนผัง<br>เพื่อดูรายละเอียดเครื่อง</div>`;
   const bAlert=batteryAlertLevel(a), mAlert=maAlertLevel(a);
   const editable=canEditLab(a.lab_id);
+  const openTicket=tickets.find(t=>t.asset_id===a.asset_id && t.status==='รอดำเนินการ');
   return `
     <h3>${a.asset_id}</h3>
     <div class="risk-chip risk-${a.risk_status}">${RISK_LABEL[a.risk_status]}</div>
+    ${openTicket?`<div class="risk-chip risk-red" style="margin-right:6px;">🚨 แจ้งซ่อมค้างอยู่</div>`:''}
     <div class="detail-row"><span class="k">ตำแหน่งติดตั้ง</span><span class="v">${escapeHtml(a.location)||'—'}</span></div>
     <div class="detail-row"><span class="k">ยี่ห้อ / ขนาด (Rating)</span><span class="v">${escapeHtml(a.brand)} ${escapeHtml(a.ups_rating)}</span></div>
     <div class="detail-row"><span class="k">หมายเลขเครื่อง</span><span class="v mono">${escapeHtml(a.serial_number)||'—'}</span></div>
     <div class="detail-row"><span class="k">เปลี่ยนแบตล่าสุด</span><span class="v mono">${fmtDate(a.last_battery_date)}</span></div>
     <div class="detail-row"><span class="k">กำหนดเปลี่ยนแบตถัดไป</span><span class="v mono">${fmtDate(nextBatteryDue(a))}</span></div>
-    <div class="detail-row"><span class="k">กำหนดบำรุงรักษา (MA)</span><span class="v mono">${fmtDate(a.next_ma_date)}</span></div>
+    <div class="detail-row"><span class="k">กำหนดบำรุงรักษา (MA)</span><span class="v mono">${fmtDate(nextMaDue(a))}</span></div>
     <div class="detail-row"><span class="k">บริษัทตามสัญญา</span><span class="v">${escapeHtml(a.contract_company)||'—'}</span></div>
     <div class="detail-row"><span class="k">ผู้รับผิดชอบ (บริษัท)</span><span class="v">${escapeHtml(a.contract_contact_name)||'—'}</span></div>
     <div class="detail-row"><span class="k">ผลตรวจ MA ล่าสุด</span><span class="v">${maChecklistBadge(a)}</span></div>
     <div class="detail-row"><span class="k">การรับทราบแจ้งเตือน</span><span class="v">${a.acknowledge_status==='Acknowledged'?`<span class="ack-tag">รับทราบแล้ว</span>`:'รอรับทราบ'}</span></div>
     ${(bAlert||mAlert)?`<div class="callout" style="margin-top:12px;">
       ${bAlert?`⏰ ${bAlert.overdue?'เลยกำหนดเปลี่ยนแบตเตอรี่แล้ว':'ใกล้ครบกำหนดเปลี่ยนแบตเตอรี่'} (${Math.abs(bAlert.days)} วัน)<br>`:''}
-      ${mAlert?`🛠️ ${mAlert.overdue?'เลยกำหนดบำรุงรักษาแล้ว':'ใกล้ครบกำหนดบำรุงรักษาประจำปี'} (${Math.abs(mAlert.days)} วัน)`:''}
+      ${mAlert?`🛠️ ${mAlert.overdue?'เลยกำหนดบำรุงรักษาแล้ว':'ใกล้ครบกำหนดบำรุงรักษา (ทุก 4 เดือน)'} (${Math.abs(mAlert.days)} วัน)`:''}
     </div>`:''}
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
       ${editable?`<button class="btn btn-sm" data-edit="${a.id}">แก้ไข</button>`:''}
       <button class="btn btn-sm" data-view-in-table="${a.id}">ดูในตาราง</button>
       <button class="btn btn-sm" data-showqr="${a.id}">QR Code</button>
       ${a.contract_contact_email?`<a class="btn btn-sm" href="mailto:${escapeAttr(a.contract_contact_email)}?subject=${encodeURIComponent('นัดหมาย MA / เปลี่ยนแบตเตอรี่ — '+a.asset_id)}">✉️ ติดต่อบริษัทนัด MA/เปลี่ยนแบต</a>`:''}
+      <button class="btn btn-sm btn-danger" data-report-issue="${a.id}">🚨 แจ้งซ่อมด่วน</button>
+      <button class="btn btn-sm" data-tech-entry="${a.id}">🔧 ช่างกรอกผลดำเนินงาน</button>
     </div>`;
 }
 
@@ -685,11 +705,12 @@ function viewAssets(){
               <td>${escapeHtml(a.battery_qty)}</td>
               <td class="mono">${fmtDate(a.last_battery_date)}</td>
               <td class="mono">${fmtDate(nextBatteryDue(a))}</td>
-              <td class="mono">${fmtDate(a.next_ma_date)}</td>
+              <td class="mono">${fmtDate(nextMaDue(a))}</td>
               <td style="white-space:normal;min-width:150px;">${maChecklistBadge(a)}</td>
               <td><span class="risk-chip risk-${a.risk_status}">${RISK_LABEL[a.risk_status]}</span></td>
               <td>${a.acknowledge_status==='Acknowledged'?`<span class="ack-tag">รับทราบแล้ว</span>`:'รอรับทราบ'}</td>
               <td class="actions-cell">
+                <button class="btn btn-sm btn-danger" data-report-issue="${a.id}">🚨 แจ้งซ่อม</button>
                 ${rowEdit?`<button class="btn btn-sm" data-edit="${a.id}">แก้ไข</button><button class="btn btn-sm btn-danger" data-del="${a.id}">ลบ</button>`:''}
               </td>
             </tr>`;}).join('')}
@@ -704,9 +725,9 @@ function viewAssets(){
 function viewAlerts(){
   const scoped=getScopedAssets();
   const battery=scoped.filter(a=>batteryAlertLevel(a)).sort((a,b)=>daysUntil(nextBatteryDue(a))-daysUntil(nextBatteryDue(b)));
-  const ma=scoped.filter(a=>maAlertLevel(a)).sort((a,b)=>daysUntil(a.next_ma_date)-daysUntil(a.next_ma_date));
+  const ma=scoped.filter(a=>maAlertLevel(a)).sort((a,b)=>daysUntil(nextMaDue(a))-daysUntil(nextMaDue(b)));
   return `
-    <div class="page-head"><div><h2>ศูนย์แจ้งเตือน</h2><p>รายการที่ใกล้ครบกำหนดเปลี่ยนแบตเตอรี่ (ล่วงหน้า 30 วัน) และบำรุงรักษาประจำปี (ล่วงหน้า 7 วัน)</p></div></div>
+    <div class="page-head"><div><h2>ศูนย์แจ้งเตือน</h2><p>รายการที่ใกล้ครบกำหนดเปลี่ยนแบตเตอรี่ (ล่วงหน้า 30 วัน) และบำรุงรักษาทุก 4 เดือน (ล่วงหน้า 7 วัน)</p></div></div>
     <div class="callout">
       <b>หมายเหตุการทำงาน:</b> ไฟล์นี้เป็นแอปฝั่งผู้ใช้ (client-side) จึงยังไม่มีเซิร์ฟเวอร์คอยรัน Cron Job หรือส่งอีเมลอัตโนมัติจริง
       ระบบจะสแกนแจ้งเตือนทุกครั้งที่เปิดหน้านี้ ปุ่ม “ส่งอีเมลแจ้งเตือน” จะเปิดโปรแกรมอีเมลพร้อมข้อความร่างไว้ให้ (mailto)
@@ -714,15 +735,15 @@ function viewAlerts(){
     <div class="alert-group"><h4>🔋 แจ้งเตือนเปลี่ยนแบตเตอรี่ (${battery.length})</h4>
       ${battery.length?battery.map(a=>alertCard(a,'battery')).join(''):`<div class="empty-state" style="padding:24px;">ไม่มีรายการใกล้ครบกำหนดในขณะนี้</div>`}
     </div>
-    <div class="alert-group"><h4>🛠️ แจ้งเตือนบำรุงรักษาประจำปี (${ma.length})</h4>
+    <div class="alert-group"><h4>🛠️ แจ้งเตือนบำรุงรักษา ทุก 4 เดือน (${ma.length})</h4>
       ${ma.length?ma.map(a=>alertCard(a,'ma')).join(''):`<div class="empty-state" style="padding:24px;">ไม่มีรายการใกล้ครบกำหนดในขณะนี้</div>`}
     </div>`;
 }
 function alertCard(a,type){
   const info=type==='battery'?batteryAlertLevel(a):maAlertLevel(a);
-  const due=type==='battery'?nextBatteryDue(a):a.next_ma_date;
+  const due=type==='battery'?nextBatteryDue(a):nextMaDue(a);
   const kc=info.overdue?'var(--red)':'var(--yellow)';
-  const verb=type==='battery'?'เปลี่ยนแบตเตอรี่':'บำรุงรักษาประจำปี (MA)';
+  const verb=type==='battery'?'เปลี่ยนแบตเตอรี่':'บำรุงรักษา MA (ทุก 4 เดือน)';
   const statusMsg=info.overdue?`เลยกำหนด${verb}มาแล้ว <strong>${Math.abs(info.days)} วัน</strong> (กำหนด ${fmtDate(due)})`:`ใกล้ครบกำหนด${verb}ใน <strong>${info.days} วัน</strong> (กำหนด ${fmtDate(due)})`;
   const subject=encodeURIComponent(`แจ้งเตือน${verb} — ${a.asset_id}`);
   const body=encodeURIComponent(`เรียน ${a.responsible_name||'ผู้รับผิดชอบ'}\n\nระบบแจ้งเตือน${verb}สำหรับเครื่อง UPS ดังนี้\nAsset ID: ${a.asset_id}\nห้องปฏิบัติการ: ${getLab(a.lab_id)?.name||''}\nตำแหน่ง: ${a.location}\nกำหนด: ${fmtDate(due)}\n\nกรุณาดำเนินการและกดรับทราบในระบบทะเบียน UPS\nขอบคุณครับ/ค่ะ`);
@@ -745,12 +766,49 @@ function alertCard(a,type){
 /* =========================================================
    LAB CONTACTS VIEW — responsible person per lab + phone
 ========================================================= */
+function viewTickets(){
+  const scoped=getScopedTickets().slice().sort((a,b)=> new Date(b.reported_at||0)-new Date(a.reported_at||0));
+  const showLabCol = currentLabId==='ALL';
+  const open = scoped.filter(t=>t.status==='รอดำเนินการ');
+  const done = scoped.filter(t=>t.status==='เสร็จสิ้น');
+  return `
+    <div class="page-head"><div><h2>แจ้งซ่อม</h2><p>รายการแจ้งซ่อมด่วนของเครื่อง UPS — กดปุ่ม “🚨 แจ้งซ่อมด่วน” จากการ์ดรายละเอียดเครื่อง (หน้าแผนที่) เพื่อแจ้งช่างทันที</p></div></div>
+    <div class="alert-group"><h4>🔴 รอดำเนินการ (${open.length})</h4>
+      ${open.length? open.map(t=>ticketCard(t, showLabCol)).join('') : `<div class="empty-state" style="padding:24px;">ไม่มีรายการแจ้งซ่อมที่ค้างอยู่</div>`}
+    </div>
+    <div class="alert-group"><h4>✅ เสร็จสิ้นแล้ว (${done.length})</h4>
+      ${done.length? done.slice(0,25).map(t=>ticketCard(t, showLabCol)).join('') : `<div class="empty-state" style="padding:24px;">ยังไม่มีรายการที่ปิดงานแล้ว</div>`}
+    </div>`;
+}
+function actionTypeLabel(k){ return {battery:'เปลี่ยนแบตเตอรี่', ma:'ทำ MA', repair:'ซ่อมแซมอื่นๆ'}[k]||k; }
+function ticketCard(t, showLabCol){
+  const asset=assets.find(a=>a.asset_id===t.asset_id);
+  const editable=canEditLab(t.lab_id);
+  const kc = t.status==='รอดำเนินการ' ? 'var(--red)' : 'var(--green)';
+  return `
+    <div class="alert-card" style="--kc:${kc}">
+      <div class="info">
+        <div><b>${escapeHtml(t.asset_id)}</b> · ${escapeHtml(asset?.location||'')} ${showLabCol?`· <span class="helptext">${escapeHtml(getLab(t.lab_id)?.name||'')}</span>`:''}</div>
+        <div class="msg"><strong>เหตุผลที่แจ้ง:</strong> ${escapeHtml(t.reason)||'-'}</div>
+        <div class="msg">แจ้งเมื่อ ${fmtDateTime(t.reported_at)}${t.status==='เสร็จสิ้น'?` · ปิดงานเมื่อ ${fmtDateTime(t.completed_at)}`:''}</div>
+        ${t.technician_notes?`<div class="msg"><strong>ผลดำเนินงาน:</strong> ${escapeHtml(t.technician_notes)}</div>`:''}
+        ${(t.action_types&&t.action_types.length)?`<div class="msg">ประเภทงาน: ${t.action_types.map(actionTypeLabel).join(', ')}</div>`:''}
+        ${t.pdf_data?`<div class="msg"><a href="${t.pdf_data}" download="${escapeAttr(t.pdf_name||'report.pdf')}">📎 ดาวน์โหลดเอกสารแนบ</a></div>`:t.pdf_link?`<div class="msg"><a href="${escapeAttr(t.pdf_link)}" target="_blank" rel="noopener">📎 เปิดลิงก์เอกสารแนบ</a></div>`:''}
+      </div>
+      <div class="alert-actions">
+        <span class="risk-chip ${t.status==='รอดำเนินการ'?'risk-red':'risk-green'}">${t.status}</span>
+        ${editable&&t.status==='รอดำเนินการ'?`<button class="btn btn-sm btn-gold" data-close-ticket="${t.id}">ทำเครื่องหมายว่าเสร็จสิ้น</button>`:''}
+        ${editable?`<button class="btn btn-sm btn-danger" data-del-ticket="${t.id}">ลบ</button>`:''}
+      </div>
+    </div>`;
+}
+
 function viewContacts(){
   return `
-    <div class="page-head"><div><h2>ผู้รับผิดชอบห้องปฏิบัติการ</h2><p>รายชื่อและเบอร์ติดต่อกลับของผู้รับผิดชอบดูแล UPS แต่ละห้อง — ใช้เมื่อพบความผิดปกติแล้วต้องแจ้งเจ้าของห้อง</p></div></div>
+    <div class="page-head"><div><h2>ผู้รับผิดชอบห้องปฏิบัติการ</h2><p>รายชื่อ เบอร์ติดต่อ และอีเมลของผู้รับผิดชอบดูแล UPS แต่ละห้อง — ใช้เมื่อพบความผิดปกติแล้วต้องแจ้งเจ้าของห้อง</p></div></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ห้องปฏิบัติการ</th><th>ชื่อผู้รับผิดชอบ</th><th>หมายเลขติดต่อกลับ</th><th></th></tr></thead>
+        <thead><tr><th>ห้องปฏิบัติการ</th><th>ชื่อผู้รับผิดชอบ</th><th>หมายเลขติดต่อกลับ</th><th>อีเมล</th><th></th></tr></thead>
         <tbody>
           ${labs.map(l=>{
             const editable=canEditLab(l.id);
@@ -758,13 +816,14 @@ function viewContacts(){
               <td style="text-align:right;">${escapeHtml(l.name)}</td>
               <td>${editable?`<input type="text" data-contact-name="${l.id}" value="${escapeAttr(l.contact_name)}" placeholder="ชื่อ-นามสกุล" style="width:100%;padding:6px 9px;border:1px solid var(--line);border-radius:6px;">`:(escapeHtml(l.contact_name)||'<span class="helptext">ยังไม่ระบุ</span>')}</td>
               <td>${editable?`<input type="text" data-contact-phone="${l.id}" value="${escapeAttr(l.contact_phone)}" placeholder="0xx-xxx-xxxx" class="mono" style="width:100%;padding:6px 9px;border:1px solid var(--line);border-radius:6px;">`:(l.contact_phone?`<a class="mono" href="tel:${escapeAttr(l.contact_phone)}">${escapeHtml(l.contact_phone)}</a>`:'<span class="helptext">ยังไม่ระบุ</span>')}</td>
+              <td>${editable?`<input type="email" data-contact-email="${l.id}" value="${escapeAttr(l.contact_email)}" placeholder="name@example.com" style="width:100%;padding:6px 9px;border:1px solid var(--line);border-radius:6px;">`:(l.contact_email?`<a href="mailto:${escapeAttr(l.contact_email)}">${escapeHtml(l.contact_email)}</a>`:'<span class="helptext">ยังไม่ระบุ</span>')}</td>
               <td>${editable?`<button class="btn btn-sm btn-primary" data-save-contact="${l.id}">บันทึก</button>`:''}</td>
             </tr>`;
           }).join('')}
         </tbody>
       </table>
     </div>
-    ${session.role==='public'?`<div class="callout blue" style="margin-top:16px;">เข้าสู่ระบบผู้ดูแล (รวมหรือรายห้อง) เพื่ออัปเดตชื่อและเบอร์ติดต่อของห้องที่รับผิดชอบ</div>`:''}`;
+    ${session.role==='public'?`<div class="callout blue" style="margin-top:16px;">เข้าสู่ระบบผู้ดูแล (รวมหรือรายห้อง) เพื่ออัปเดตชื่อ เบอร์ติดต่อ และอีเมลของห้องที่รับผิดชอบ</div>`:''}`;
 }
 
 /* =========================================================
@@ -787,7 +846,7 @@ function viewKnowledge(){
         <li>ตรวจสอบว่าโหลดที่ต่อกับ UPS ไม่เกินพิกัดที่ระบุ (VA/Watt) ของเครื่อง</li>
         <li>ตรวจสอบสายไฟ ปลั๊ก และจุดต่อสายไม่ให้หลวมหรือมีรอยไหม้</li>
         <li>บันทึกวันที่เปลี่ยนแบตเตอรี่และกำหนดเปลี่ยนครั้งถัดไปไว้ในระบบทะเบียนเสมอ</li>
-        <li>ทดสอบการทำงานโหมดแบตเตอรี่เป็นระยะตามรอบ MA ประจำปี โดยผู้ที่ได้รับมอบหมาย/ช่างเทคนิคเท่านั้น และแจ้งผู้ใช้งานเครื่องมือก่อนทุกครั้ง</li>
+        <li>ทดสอบการทำงานโหมดแบตเตอรี่เป็นระยะตามรอบ MA ทุก 4 เดือน โดยผู้ที่ได้รับมอบหมาย/ช่างเทคนิคเท่านั้น และแจ้งผู้ใช้งานเครื่องมือก่อนทุกครั้ง</li>
       </ul>
     </div>
 
@@ -814,7 +873,7 @@ function viewKnowledge(){
     </div>
 
     <div class="settings-card">
-      <h4>📝 Checklist สิ่งที่ต้องตรวจสอบตอนทำ MA (บำรุงรักษาประจำปี)</h4>
+      <h4>📝 Checklist สิ่งที่ต้องตรวจสอบตอนทำ MA (บำรุงรักษาทุก 4 เดือน)</h4>
       <p style="margin:0 0 10px;">รายการตรวจมาตรฐานที่ควรทำครบทุกข้อในการทำ MA แต่ละครั้ง — ติ๊กผลตรวจจริงของแต่ละเครื่อง (ผ่าน/ไม่ผ่าน + เหตุผล) ได้ที่หน้า “รายการเครื่อง UPS” → เปิดแก้ไขเครื่องนั้น → หัวข้อ “Checklist การทำ MA”</p>
       <ul style="margin:0;padding-right:18px;line-height:2;list-style:none;">
         ${MA_CHECKLIST_ITEMS.map(item=>`<li>☐ ${escapeHtml(item.label)}</li>`).join('')}
@@ -853,6 +912,12 @@ function viewSettings(){
       <p>รหัสผ่านนี้ใช้เข้าสู่ระบบเพื่อแก้ไขข้อมูลเฉพาะห้อง “${escapeHtml(getLab(currentLabId)?.name||'')}”</p>
       <input type="password" id="f_lab_pw" placeholder="รหัสผ่านใหม่" style="width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:7px;margin-bottom:8px;">
       <button class="btn btn-sm btn-primary" id="btnSaveLabPw">บันทึกรหัสผ่านห้องนี้</button>
+    </div>
+    <div class="settings-card">
+      <h4>รหัสช่าง (สำหรับกรอกผลดำเนินงานหลังสแกน QR)</h4>
+      <p>คนละรหัสกับรหัสผู้ดูแลห้อง — มอบให้ช่าง/บริษัทผู้รับเหมาใช้เฉพาะตอนกรอกผลการเปลี่ยนแบต/ทำ MA/ซ่อม หลังสแกน QR ที่ติดเครื่อง ${getLab(currentLabId)?.technicianCodeHash?'<span class="ack-tag">ตั้งรหัสไว้แล้ว</span>':'<span class="helptext">ยังไม่ได้ตั้งรหัส</span>'}</p>
+      <input type="password" id="f_tech_code_new" placeholder="ตั้งรหัสช่างใหม่" style="width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:7px;margin-bottom:8px;">
+      <button class="btn btn-sm btn-primary" id="btnSaveTechCode">บันทึกรหัสช่าง</button>
     </div>
     <div class="settings-card">
       <h4>สำรอง / กู้คืนข้อมูลห้องนี้</h4>
@@ -960,7 +1025,7 @@ function openAssetModal(id){
   if(a && !canEditLab(a.lab_id)){ toast('คุณไม่มีสิทธิ์แก้ไขห้องปฏิบัติการนี้'); return; }
   if(!a && !canEditCurrentScope()){ toast('คุณไม่มีสิทธิ์เพิ่มเครื่องในห้องนี้'); return; }
   const editing=!!a;
-  const defaultLabId = editing ? a.lab_id : (currentLabId!=='ALL'?currentLabId:(session.role==='lab'?session.labId:labs[0].id));
+  const defaultLabId = editing ? a.lab_id : (currentLabId!=='ALL'?currentLabId:(session.role==='lab'?session.labId:labs[0]?.id));
   const labSelectHtml = session.role==='master'
     ? `<select id="f_lab_id">${labs.map(l=>`<option value="${l.id}" ${defaultLabId===l.id?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}</select>`
     : `<input type="text" value="${escapeAttr(getLab(defaultLabId)?.name||'')}" disabled><input type="hidden" id="f_lab_id" value="${defaultLabId}">`;
@@ -1011,7 +1076,10 @@ function openAssetModal(id){
       <div class="form-field"><label>วันที่เปลี่ยนแบตครั้งต่อไป</label><input type="date" id="f_next_battery" value="${editing?a.next_battery_date||'':''}">
         <button type="button" class="inline-btn" id="btnAutoCalc">คำนวณอัตโนมัติ (+2 ปีจากวันที่เปลี่ยนล่าสุด)</button>
       </div>
-      <div class="form-field"><label>กำหนดบำรุงรักษาประจำปี (MA)</label><input type="date" id="f_ma" value="${editing?a.next_ma_date||'':''}"></div>
+      <div class="form-field"><label>วันที่ทำ MA ล่าสุด</label><input type="date" id="f_ma_last" value="${editing?a.last_ma_date||'':''}"></div>
+      <div class="form-field"><label>กำหนด MA ครั้งต่อไป (ทุก 4 เดือน)</label><input type="date" id="f_ma" value="${editing?a.next_ma_date||'':''}">
+        <button type="button" class="inline-btn" id="btnAutoCalcMa">คำนวณอัตโนมัติ (+4 เดือนจากวันที่ทำล่าสุด)</button>
+      </div>
     </div>
 
     <div class="form-section-title">Checklist การทำ MA (ครั้งล่าสุด)</div>
@@ -1054,6 +1122,11 @@ function openAssetModal(id){
     const base=document.getElementById('f_battery_date').value;
     if(!base){ toast('กรุณาระบุวันที่เปลี่ยนแบตล่าสุดก่อน'); return; }
     document.getElementById('f_next_battery').value=addYearsISO(base,2);
+  };
+  document.getElementById('btnAutoCalcMa').onclick=()=>{
+    const base=document.getElementById('f_ma_last').value;
+    if(!base){ toast('กรุณาระบุวันที่ทำ MA ล่าสุดก่อน'); return; }
+    document.getElementById('f_ma').value=addMonthsISO(base,4);
   };
   document.querySelectorAll('.ma-check-select').forEach(sel=>{
     const row=sel.closest('.ma-check-row');
@@ -1101,6 +1174,7 @@ function saveAssetFromModal(id){
     risk_status:document.getElementById('f_risk').value,
     last_battery_date:document.getElementById('f_battery_date').value||null,
     next_battery_date:document.getElementById('f_next_battery').value||null,
+    last_ma_date:document.getElementById('f_ma_last').value||null,
     next_ma_date:document.getElementById('f_ma').value||null,
     ma_checklist: gatherMaChecklist(),
     responsible_name:document.getElementById('f_resp_name').value.trim(),
@@ -1175,6 +1249,163 @@ function printQrLabels(ids){
   ids.forEach(id=>{ const a=assets.find(x=>x.id===id); if(!a) return; const el=document.getElementById('qrp_'+a.id); if(el) new QRCode(el,{text:qrValueFor(a),width:120,height:120,correctLevel:QRCode.CorrectLevel.M}); });
   setTimeout(()=>window.print(),150);
 }
+/* =========================================================
+   URGENT REPAIR REPORT ("แจ้งซ่อมด่วน")
+========================================================= */
+function openReportIssueModal(assetId){
+  const a=assets.find(x=>x.id===assetId); if(!a) return;
+  document.getElementById('modalBody').innerHTML=`
+    <h3>🚨 แจ้งซ่อมด่วน — ${a.asset_id}</h3>
+    <p class="modal-sub">${escapeHtml(a.location)||''}</p>
+    <div class="form-field full"><label>เหตุผล / อาการที่พบ *</label><textarea id="f_issue_reason" rows="4" placeholder="เช่น เครื่องมีเสียงร้องเตือนตลอดเวลา, ไฟไม่ติด, มีกลิ่นไหม้..."></textarea></div>
+    <p class="helptext" id="issueError" style="color:var(--red);"></p>
+    <div class="modal-foot">
+      <button class="btn" id="btnCancelIssue">ยกเลิก</button>
+      <button class="btn btn-danger" id="btnSubmitIssue">🚨 แจ้งซ่อมและส่งอีเมลช่าง</button>
+    </div>`;
+  document.getElementById('modalBg').classList.add('open');
+  document.getElementById('btnCancelIssue').onclick=closeModal;
+  document.getElementById('btnSubmitIssue').onclick=()=>submitIssueReport(a);
+}
+async function submitIssueReport(a){
+  const reason=document.getElementById('f_issue_reason').value.trim();
+  if(!reason){ document.getElementById('issueError').textContent='กรุณาระบุเหตุผล/อาการที่พบ'; return; }
+  try{
+    await db.collection(FS.tickets).add({
+      asset_id:a.asset_id, lab_id:a.lab_id, reason,
+      status:'รอดำเนินการ', reported_at:new Date().toISOString(),
+      technician_notes:'', action_types:[], completed_at:null,
+      pdf_name:'', pdf_data:'', pdf_link:''
+    });
+    closeModal();
+    const to = a.contract_contact_email || getLab(a.lab_id)?.contact_email || '';
+    if(to){
+      toast('แจ้งซ่อมเรียบร้อย กำลังเปิดอีเมลแจ้งช่าง...');
+      const subject=encodeURIComponent(`🚨 แจ้งซ่อมด่วน — ${a.asset_id}`);
+      const body=encodeURIComponent(`เรียนช่าง/ผู้เกี่ยวข้อง\n\nมีการแจ้งซ่อมด่วนสำหรับเครื่อง UPS ดังนี้\nAsset ID: ${a.asset_id}\nห้องปฏิบัติการ: ${getLab(a.lab_id)?.name||a.lab_id}\nตำแหน่ง: ${a.location}\n\nอาการ/เหตุผลที่แจ้ง:\n${reason}\n\nกรุณาดำเนินการโดยเร็วและปิดงานในระบบทะเบียน UPS หลังดำเนินการเสร็จสิ้น\nขอบคุณครับ/ค่ะ`);
+      setTimeout(()=>{ window.location.href=`mailto:${to}?subject=${subject}&body=${body}`; }, 300);
+    } else {
+      toast('บันทึกการแจ้งซ่อมแล้ว แต่ยังไม่มีอีเมลช่าง/ผู้รับผิดชอบให้ส่งถึง — กรุณาเพิ่มอีเมลในทะเบียนเครื่องนี้หรือหน้าผู้รับผิดชอบห้อง');
+    }
+  }catch(e){ console.error(e); toast('แจ้งซ่อมไม่สำเร็จ — ตรวจสอบการเชื่อมต่อฐานข้อมูล'); }
+}
+
+/* =========================================================
+   TECHNICIAN ENTRY (QR scan → code → fill in results)
+========================================================= */
+function openTechCodePrompt(assetId){
+  document.getElementById('modalBody').innerHTML=`
+    <h3>รหัสช่าง</h3>
+    <p class="modal-sub">กรอกรหัสสำหรับช่าง/ผู้ดำเนินการบำรุงรักษา เพื่อกรอกผลการดำเนินงานของเครื่องนี้</p>
+    <div class="form-field"><label>รหัสช่าง</label><input type="password" id="f_tech_code" autofocus></div>
+    <p class="helptext" id="techCodeError" style="color:var(--red);"></p>
+    <div class="modal-foot">
+      <button class="btn" id="btnCancelTechCode">ยกเลิก</button>
+      <button class="btn btn-primary" id="btnCheckTechCode">ยืนยัน</button>
+    </div>`;
+  document.getElementById('modalBg').classList.add('open');
+  document.getElementById('modalBody').classList.add('narrow');
+  const input=document.getElementById('f_tech_code');
+  input.addEventListener('keydown', e=>{ if(e.key==='Enter') checkTechCode(assetId); });
+  document.getElementById('btnCancelTechCode').onclick=closeModal;
+  document.getElementById('btnCheckTechCode').onclick=()=>checkTechCode(assetId);
+}
+async function checkTechCode(assetId){
+  const a=assets.find(x=>x.id===assetId); if(!a) return;
+  const lab=getLab(a.lab_id);
+  if(!lab || !lab.technicianCodeHash){ toast('ห้องนี้ยังไม่ได้ตั้งรหัสช่าง กรุณาติดต่อผู้ดูแลห้อง'); return; }
+  const code=document.getElementById('f_tech_code').value;
+  const hash=await sha256(code);
+  if(hash!==lab.technicianCodeHash){ document.getElementById('techCodeError').textContent='รหัสไม่ถูกต้อง'; return; }
+  openTechEntryForm(a);
+}
+function openTechEntryForm(a){
+  const openTicket=tickets.find(t=>t.asset_id===a.asset_id && t.status==='รอดำเนินการ');
+  document.getElementById('modalBody').classList.remove('narrow');
+  document.getElementById('modalBody').innerHTML=`
+    <h3>กรอกผลการดำเนินงาน — ${a.asset_id}</h3>
+    <p class="modal-sub">${escapeHtml(a.location)||''}${openTicket?` · อ้างอิงรายการแจ้งซ่อม: ${escapeHtml(openTicket.reason)}`:' · บันทึกผลงานบำรุงรักษาทั่วไป (ไม่ผูกกับรายการแจ้งซ่อม)'}</p>
+    <div class="form-section-title">ประเภทงานที่ดำเนินการ</div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;">
+      <label style="display:flex;align-items:center;gap:6px;font-size:13.5px;"><input type="checkbox" id="f_tech_battery"> เปลี่ยนแบตเตอรี่</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13.5px;"><input type="checkbox" id="f_tech_ma"> ทำ MA</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13.5px;"><input type="checkbox" id="f_tech_repair"> ซ่อมแซมอื่นๆ</label>
+    </div>
+    <div class="form-grid">
+      <div class="form-field"><label>วันที่ดำเนินการ</label><input type="date" id="f_tech_date" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="form-field full"><label>รายละเอียดผลการดำเนินงาน *</label><textarea id="f_tech_notes" rows="4" placeholder="สรุปสิ่งที่ตรวจ/ซ่อม/เปลี่ยน และผลลัพธ์"></textarea></div>
+      <div class="form-field full">
+        <label>แนบไฟล์ PDF รายงาน (ถ้ามี — ไฟล์ไม่เกิน ~700KB)</label>
+        <input type="file" id="f_tech_pdf" accept="application/pdf">
+        <p class="helptext">ถ้าไฟล์ใหญ่กว่านี้ ให้อัปโหลดขึ้น Google Drive แล้ววางลิงก์แชร์ในช่องด้านล่างแทน</p>
+      </div>
+      <div class="form-field full"><label>หรือวางลิงก์เอกสาร (Google Drive ฯลฯ)</label><input type="text" id="f_tech_pdf_link" placeholder="https://drive.google.com/..."></div>
+    </div>
+    <p class="helptext" id="techEntryError" style="color:var(--red);"></p>
+    <div class="modal-foot">
+      <button class="btn" id="btnCancelTechEntry">ยกเลิก</button>
+      <button class="btn btn-primary" id="btnSubmitTechEntry">บันทึกผลการดำเนินงาน</button>
+    </div>`;
+  document.getElementById('modalBg').classList.add('open');
+  document.getElementById('btnCancelTechEntry').onclick=closeModal;
+  document.getElementById('btnSubmitTechEntry').onclick=()=>submitTechEntry(a, openTicket);
+}
+function fileToBase64(file){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>resolve(reader.result);
+    reader.onerror=reject;
+    reader.readAsDataURL(file);
+  });
+}
+async function submitTechEntry(a, openTicket){
+  const notes=document.getElementById('f_tech_notes').value.trim();
+  if(!notes){ document.getElementById('techEntryError').textContent='กรุณากรอกรายละเอียดผลการดำเนินงาน'; return; }
+  const actionTypes=[];
+  if(document.getElementById('f_tech_battery').checked) actionTypes.push('battery');
+  if(document.getElementById('f_tech_ma').checked) actionTypes.push('ma');
+  if(document.getElementById('f_tech_repair').checked) actionTypes.push('repair');
+  const actionDate=document.getElementById('f_tech_date').value || new Date().toISOString().slice(0,10);
+  const pdfLink=document.getElementById('f_tech_pdf_link').value.trim();
+  const file=document.getElementById('f_tech_pdf').files[0];
+
+  let pdfData='', pdfName='';
+  if(file){
+    if(file.size>900000){ document.getElementById('techEntryError').textContent='ไฟล์ใหญ่เกิน 900KB กรุณาใช้ลิงก์ Google Drive แทน'; return; }
+    pdfData=await fileToBase64(file);
+    pdfName=file.name;
+  }
+
+  try{
+    if(openTicket){
+      await db.collection(FS.tickets).doc(openTicket.id).update({
+        status:'เสร็จสิ้น', technician_notes:notes, action_types:actionTypes,
+        completed_at:new Date().toISOString(), pdf_data:pdfData, pdf_name:pdfName, pdf_link:pdfLink
+      });
+    } else {
+      await db.collection(FS.tickets).add({
+        asset_id:a.asset_id, lab_id:a.lab_id, reason:'(บันทึกผลงานโดยช่าง ไม่ผ่านการแจ้งซ่อม)',
+        status:'เสร็จสิ้น', reported_at:new Date().toISOString(), completed_at:new Date().toISOString(),
+        technician_notes:notes, action_types:actionTypes, pdf_data:pdfData, pdf_name:pdfName, pdf_link:pdfLink
+      });
+    }
+    if(actionTypes.includes('battery')){
+      await db.collection(FS.assets).doc(a.id).update({
+        last_battery_date: actionDate,
+        next_battery_date: addYearsISO(actionDate, 2)
+      });
+    }
+    if(actionTypes.includes('ma')){
+      await db.collection(FS.assets).doc(a.id).update({
+        last_ma_date: actionDate,
+        next_ma_date: addMonthsISO(actionDate, 4)
+      });
+    }
+    closeModal();
+    toast('บันทึกผลการดำเนินงานเรียบร้อย ขอบคุณครับ/ค่ะ');
+  }catch(e){ console.error(e); toast('บันทึกไม่สำเร็จ — ตรวจสอบการเชื่อมต่อฐานข้อมูล'); }
+}
+
 function handleHashRoute(){
   const m=location.hash.match(/asset=([^&]+)/);
   if(!m) return;
@@ -1192,14 +1423,14 @@ function handleHashRoute(){
 function exportSelectedToExcel(){
   const rows=assets.filter(a=>selectedIds.has(a.id));
   if(!rows.length){ toast('กรุณาเลือกอย่างน้อย 1 รายการ'); return; }
-  const header=['ลำดับ','ห้องปฏิบัติการ','Asset ID','ชั้น','สถานที่','โหลดจ่ายใช้งาน','ยี่ห้อ UPS','ขนาด UPS (Rating)','หมายเลขเครื่อง','สัญญา','บริษัท','ผู้รับผิดชอบ (บริษัท)','Email ผู้รับผิดชอบ','ปีที่ติดตั้ง','ระยะเวลาการใช้งาน','ประมาณการอายุการใช้งาน','แบตเตอรี่ ขนาด','แบตเตอรี่ จำนวน','วันที่เปลี่ยนแบต','วันที่เปลี่ยนครั้งต่อไป','กำหนด MA ถัดไป','ผลตรวจ MA (ผ่าน/ไม่ผ่าน/ยังไม่ตรวจ)','รายการที่ไม่ผ่าน + เหตุผล','สถานะความเสี่ยง','ผู้รับผิดชอบ','หมายเหตุ'];
+  const header=['ลำดับ','ห้องปฏิบัติการ','Asset ID','ชั้น','สถานที่','โหลดจ่ายใช้งาน','ยี่ห้อ UPS','ขนาด UPS (Rating)','หมายเลขเครื่อง','สัญญา','บริษัท','ผู้รับผิดชอบ (บริษัท)','Email ผู้รับผิดชอบ','ปีที่ติดตั้ง','ระยะเวลาการใช้งาน','ประมาณการอายุการใช้งาน','แบตเตอรี่ ขนาด','แบตเตอรี่ จำนวน','วันที่เปลี่ยนแบต','วันที่เปลี่ยนครั้งต่อไป','วันที่ทำ MA ล่าสุด','กำหนด MA ถัดไป (ทุก 4 เดือน)','ผลตรวจ MA (ผ่าน/ไม่ผ่าน/ยังไม่ตรวจ)','รายการที่ไม่ผ่าน + เหตุผล','สถานะความเสี่ยง','ผู้รับผิดชอบ','หมายเหตุ'];
   const data=rows.map((a,i)=>{
     const s=maChecklistStats(a);
     const fails=MA_CHECKLIST_ITEMS.filter(item=>a.ma_checklist?.[item.id]?.result==='fail')
       .map(item=>`${item.label}: ${a.ma_checklist[item.id].reason||'(ไม่ระบุเหตุผล)'}`).join(' | ');
     return [i+1, getLab(a.lab_id)?.name||a.lab_id, a.asset_id, a.floor, a.location, a.load_va, a.brand, a.ups_rating, a.serial_number,
     a.contract, a.contract_company, a.contract_contact_name, a.contract_contact_email, a.install_year_text, a.duration_years, a.estimated_lifespan, a.battery_size, a.battery_qty,
-    fmtDate(a.last_battery_date), fmtDate(nextBatteryDue(a)), fmtDate(a.next_ma_date), `${s.pass}/${s.fail}/${s.unchecked}`, fails, RISK_LABEL[a.risk_status], a.responsible_name, a.notes];
+    fmtDate(a.last_battery_date), fmtDate(nextBatteryDue(a)), fmtDate(a.last_ma_date), fmtDate(nextMaDue(a)), `${s.pass}/${s.fail}/${s.unchecked}`, fails, RISK_LABEL[a.risk_status], a.responsible_name, a.notes];
   });
   const wsData=[['Summary for Thermography Inspection'],[], header, ...data];
   const ws=XLSX.utils.aoa_to_sheet(wsData);
@@ -1242,9 +1473,11 @@ function afterRender(){
     if(!lab||!canEditLab(labId)){ toast('คุณไม่มีสิทธิ์แก้ไขห้องนี้'); return; }
     const nameInput=document.querySelector(`[data-contact-name="${labId}"]`);
     const phoneInput=document.querySelector(`[data-contact-phone="${labId}"]`);
+    const emailInput=document.querySelector(`[data-contact-email="${labId}"]`);
     const contact_name = nameInput ? nameInput.value.trim() : lab.contact_name;
     const contact_phone = phoneInput ? phoneInput.value.trim() : lab.contact_phone;
-    try{ await db.collection(FS.labs).doc(labId).update({contact_name, contact_phone}); toast('บันทึกผู้รับผิดชอบห้องแล้ว'); }
+    const contact_email = emailInput ? emailInput.value.trim() : lab.contact_email;
+    try{ await db.collection(FS.labs).doc(labId).update({contact_name, contact_phone, contact_email}); toast('บันทึกผู้รับผิดชอบห้องแล้ว'); }
     catch(e){ toast('บันทึกไม่สำเร็จ'); }
   }));
 
@@ -1263,6 +1496,22 @@ function afterRender(){
   }));
   document.querySelectorAll('[data-view-in-table]').forEach(el=>el.addEventListener('click',()=>{ currentView='assets'; render(); }));
   document.querySelectorAll('[data-showqr]').forEach(el=>el.addEventListener('click',()=>openQrModal(el.dataset.showqr)));
+  document.querySelectorAll('[data-report-issue]').forEach(el=>el.addEventListener('click',()=>openReportIssueModal(el.dataset.reportIssue)));
+  document.querySelectorAll('[data-tech-entry]').forEach(el=>el.addEventListener('click',()=>openTechCodePrompt(el.dataset.techEntry)));
+  document.querySelectorAll('[data-close-ticket]').forEach(el=>el.addEventListener('click', async ()=>{
+    const t=tickets.find(x=>x.id===el.dataset.closeTicket);
+    if(!t||!canEditLab(t.lab_id)){ toast('คุณไม่มีสิทธิ์แก้ไขห้องนี้'); return; }
+    try{ await db.collection(FS.tickets).doc(t.id).update({status:'เสร็จสิ้น', completed_at:new Date().toISOString()}); toast('ปิดงานแจ้งซ่อมแล้ว'); }
+    catch(e){ toast('บันทึกไม่สำเร็จ'); }
+  }));
+  document.querySelectorAll('[data-del-ticket]').forEach(el=>el.addEventListener('click', async ()=>{
+    const t=tickets.find(x=>x.id===el.dataset.delTicket);
+    if(!t||!canEditLab(t.lab_id)){ toast('คุณไม่มีสิทธิ์ลบรายการนี้'); return; }
+    if(confirm('ยืนยันการลบรายการแจ้งซ่อมนี้?')){
+      try{ await db.collection(FS.tickets).doc(t.id).delete(); toast('ลบรายการแล้ว'); }
+      catch(e){ toast('ลบไม่สำเร็จ'); }
+    }
+  }));
   document.querySelectorAll('[data-ack]').forEach(el=>el.addEventListener('click', async ()=>{
     const a=assets.find(x=>x.id===el.dataset.ack);
     if(!a||!canEditLab(a.lab_id)){ toast('คุณไม่มีสิทธิ์แก้ไขห้องนี้'); return; }
@@ -1307,6 +1556,12 @@ function afterRender(){
     const pw=document.getElementById('f_lab_pw').value;
     if(!pw||pw.length<4){ toast('กรุณาตั้งรหัสผ่านอย่างน้อย 4 ตัวอักษร'); return; }
     try{ await db.collection(FS.labs).doc(currentLabId).update({passwordHash: await sha256(pw)}); toast('เปลี่ยนรหัสผ่านห้องนี้แล้ว'); }
+    catch(e){ toast('บันทึกไม่สำเร็จ'); }
+  });
+  document.getElementById('btnSaveTechCode')?.addEventListener('click', async ()=>{
+    const code=document.getElementById('f_tech_code_new').value;
+    if(!code||code.length<4){ toast('กรุณาตั้งรหัสอย่างน้อย 4 ตัวอักษร'); return; }
+    try{ await db.collection(FS.labs).doc(currentLabId).update({technicianCodeHash: await sha256(code)}); toast('บันทึกรหัสช่างแล้ว'); }
     catch(e){ toast('บันทึกไม่สำเร็จ'); }
   });
 
