@@ -10,6 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
   :root{
     --bg:#F7FAF7; --surface:#FFFFFF; --surface-2:#EEF6EE; --ink:#1B2A1E; --ink-soft:#5E6E5F;
@@ -129,6 +130,7 @@
   .alert-card .info .msg{font-size:13px;color:var(--ink-soft);margin-top:3px;}
   .alert-card .info .msg strong{color:var(--ink);}
   .ack-tag{font-size:11.5px;font-family:var(--mono);padding:2px 8px;border-radius:20px;background:var(--green-bg);color:var(--green);}
+  .ack-tag.in-progress{background:var(--yellow-bg);color:var(--yellow);}
   .alert-actions{display:flex;gap:8px;flex-shrink:0;}
 
   .callout{background:#FFF9EC;border:1px solid #EEDBA0;border-radius:10px;padding:13px 16px;font-size:13px;color:#6B550F;margin-bottom:20px;line-height:1.65;}
@@ -156,6 +158,20 @@
   .modal-foot{display:flex;justify-content:flex-end;gap:9px;margin-top:20px;}
   .helptext{font-size:11.5px;color:var(--ink-soft);margin-top:2px;}
   .inline-btn{font-size:11px;color:var(--brand);background:none;border:none;cursor:pointer;text-decoration:underline;padding:0;}
+  .ocr-scan-box{border:1.5px dashed var(--brand);background:var(--surface-2);border-radius:9px;padding:12px 14px;margin-bottom:16px;}
+  .ocr-scan-box label{font-size:12.5px;font-weight:600;color:var(--brand-dark);display:block;margin-bottom:8px;}
+  .ocr-scan-box input[type=file]{font-size:12.5px;width:100%;}
+  .ocr-scan-box .helptext{margin-top:6px;}
+  .ocr-scan-box.is-busy{opacity:.7;pointer-events:none;}
+  .ocr-filled{background:#FFF9E0 !important;}
+  #cropStageWrap{position:relative;max-width:100%;overflow:hidden;border:1px solid var(--line);border-radius:8px;background:#111;touch-action:none;}
+  #cropStageWrap img{display:block;max-width:100%;user-select:none;-webkit-user-drag:none;}
+  #cropBox{position:absolute;border:2px dashed var(--gold);background:rgba(201,162,39,.18);cursor:move;}
+  .crop-handle{position:absolute;width:16px;height:16px;background:var(--gold);border:2px solid #fff;border-radius:50%;}
+  .crop-handle[data-corner=nw]{left:-9px;top:-9px;cursor:nwse-resize;}
+  .crop-handle[data-corner=ne]{right:-9px;top:-9px;cursor:nesw-resize;}
+  .crop-handle[data-corner=sw]{left:-9px;bottom:-9px;cursor:nesw-resize;}
+  .crop-handle[data-corner=se]{right:-9px;bottom:-9px;cursor:nwse-resize;}
   .ma-checklist{display:flex;flex-direction:column;gap:6px;margin-bottom:6px;}
   .ma-check-row{display:grid;grid-template-columns:1fr 130px 1fr;gap:10px;align-items:center;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);}
   .ma-check-row.is-fail{border-color:var(--red);background:var(--red-bg);}
@@ -221,6 +237,7 @@
 </div>
 
 <div class="modal-bg" id="modalBg"><div class="modal" id="modalBody"></div></div>
+<div class="modal-bg" id="ocrCropBg" style="z-index:60;"><div class="modal" id="ocrCropBody" style="max-width:680px;"></div></div>
 <div class="toast" id="toast"></div>
 <div id="qrPrintSheet"></div>
 
@@ -428,6 +445,23 @@ function batteryAlertLevel(a){ const d=daysUntil(nextBatteryDue(a)); if(d===null
 function maAlertLevel(a){ const d=daysUntil(nextMaDue(a)); if(d===null) return null; if(d<=7) return {days:d,overdue:d<0}; return null; }
 function fmtDate(d){ if(!d) return '—'; const dt=new Date(d); return dt.toLocaleDateString('th-TH',{year:'numeric',month:'short',day:'numeric'}); }
 function fmtDateTime(d){ if(!d) return '—'; const dt=new Date(d); return dt.toLocaleDateString('th-TH',{year:'numeric',month:'short',day:'numeric'})+' '+dt.toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}); }
+/* Every notification (reminders, urgent repair reports) goes to both the
+   maintenance company contact and the lab's responsible staff contact,
+   plus the asset-specific responsible person if one is set. Deduped. */
+function getNotifyRecipients(a, lab){
+  const list=[lab?.contact_email, a.responsible_email, a.contract_contact_email].filter(Boolean);
+  return [...new Set(list.map(e=>e.trim()).filter(Boolean))];
+}
+/* Opens a "job closed" email draft (mailto) to the same recipients that
+   would have gotten the reminder — so people know the issue is resolved
+   without having to check the app themselves. Fires on a short delay so
+   it doesn't fight with any toast/UI update happening in the same tick. */
+function sendClosureMailto(recipients, subject, bodyLines){
+  if(!recipients.length) return;
+  const body=encodeURIComponent(bodyLines.join('\n'));
+  const subj=encodeURIComponent(subject);
+  setTimeout(()=>{ window.location.href=`mailto:${recipients.join(',')}?subject=${subj}&body=${body}`; }, 300);
+}
 
 function maChecklistStats(a){
   const cl=a.ma_checklist||{};
@@ -447,6 +481,13 @@ function maChecklistBadge(a){
   if(s.unchecked) parts.push(`<span class="helptext">ยังไม่ตรวจ ${s.unchecked}</span>`);
   return parts.join(' · ');
 }
+const ACK_LABEL={Pending:'รอรับทราบ', Acknowledged:'รับทราบแล้ว', InProgress:'กำลังดำเนินงาน'};
+function ackStatusBadge(a){
+  const st=a.acknowledge_status||'Pending';
+  if(st==='InProgress') return `<span class="ack-tag in-progress">กำลังดำเนินงาน</span>`;
+  if(st==='Acknowledged') return `<span class="ack-tag">รับทราบแล้ว</span>`;
+  return 'รอรับทราบ';
+}
 
 /* =========================================================
    NAV / SHELL
@@ -458,6 +499,7 @@ const NAV_ITEMS=[
   {id:'tickets',label:'แจ้งซ่อม',icon:'🚨'},
   {id:'contacts',label:'ผู้รับผิดชอบห้อง',icon:'☎️'},
   {id:'knowledge',label:'ความรู้เกี่ยวกับ UPS',icon:'📘'},
+  {id:'dataguide',label:'วิธีกรอกข้อมูล',icon:'📋'},
   {id:'settings',label:'ตั้งค่า / ผู้ดูแลระบบ',icon:'⚙️'},
 ];
 function renderLabSwitcher(){
@@ -530,7 +572,7 @@ function renderNav(){
 }
 function countActiveAlerts(){
   let n=0;
-  getScopedAssets().forEach(a=>{ if(batteryAlertLevel(a)&&a.acknowledge_status!=='Acknowledged') n++; if(maAlertLevel(a)) n++; });
+  getScopedAssets().forEach(a=>{ if(batteryAlertLevel(a)&&a.acknowledge_status==='Pending') n++; if(maAlertLevel(a)) n++; });
   return n;
 }
 function render(){
@@ -543,6 +585,7 @@ function render(){
   else if(currentView==='tickets') main.innerHTML=viewTickets();
   else if(currentView==='contacts') main.innerHTML=viewContacts();
   else if(currentView==='knowledge') main.innerHTML=viewKnowledge();
+  else if(currentView==='dataguide') main.innerHTML=viewDataGuide();
   else if(currentView==='settings') main.innerHTML=viewSettings();
   afterRender();
 }
@@ -554,10 +597,10 @@ function viewAllLabsDashboard(){
   const rows=labs.map(l=>{
     const la=assets.filter(a=>a.lab_id===l.id);
     return { l, total:la.length, red:la.filter(a=>a.risk_status==='red').length, yellow:la.filter(a=>a.risk_status==='yellow').length,
-      pending: la.filter(a=>a.acknowledge_status!=='Acknowledged'&&(batteryAlertLevel(a)||maAlertLevel(a))).length };
+      pending: la.filter(a=>a.acknowledge_status==='Pending'&&(batteryAlertLevel(a)||maAlertLevel(a))).length };
   });
   const total=assets.length, red=assets.filter(a=>a.risk_status==='red').length, yellow=assets.filter(a=>a.risk_status==='yellow').length;
-  const pending=assets.filter(a=>a.acknowledge_status!=='Acknowledged'&&(batteryAlertLevel(a)||maAlertLevel(a))).length;
+  const pending=assets.filter(a=>a.acknowledge_status==='Pending'&&(batteryAlertLevel(a)||maAlertLevel(a))).length;
   return `
     <div class="page-head"><div><h2>ภาพรวมทุกห้องปฏิบัติการ</h2><p>สรุปสถานะ UPS รวม ${labs.length} ห้องปฏิบัติการ — เลือกห้องจากเมนูด้านซ้ายเพื่อดูแผนที่และแก้ไขรายเครื่อง</p></div></div>
     <div class="kpi-row">
@@ -585,7 +628,7 @@ function viewAllLabsDashboard(){
 function viewDashboard(){
   const scoped=getScopedAssets();
   const total=scoped.length, red=scoped.filter(a=>a.risk_status==='red').length, yellow=scoped.filter(a=>a.risk_status==='yellow').length;
-  const pending=scoped.filter(a=>a.acknowledge_status!=='Acknowledged'&&(batteryAlertLevel(a)||maAlertLevel(a))).length;
+  const pending=scoped.filter(a=>a.acknowledge_status==='Pending'&&(batteryAlertLevel(a)||maAlertLevel(a))).length;
   const editable=canEditCurrentScope();
   const bg=mapBgs[currentLabId];
   return `
@@ -635,7 +678,7 @@ function renderDetailCard(){
     <div class="detail-row"><span class="k">บริษัทตามสัญญา</span><span class="v">${escapeHtml(a.contract_company)||'—'}</span></div>
     <div class="detail-row"><span class="k">ผู้รับผิดชอบ (บริษัท)</span><span class="v">${escapeHtml(a.contract_contact_name)||'—'}</span></div>
     <div class="detail-row"><span class="k">ผลตรวจ MA ล่าสุด</span><span class="v">${maChecklistBadge(a)}</span></div>
-    <div class="detail-row"><span class="k">การรับทราบแจ้งเตือน</span><span class="v">${a.acknowledge_status==='Acknowledged'?`<span class="ack-tag">รับทราบแล้ว</span>`:'รอรับทราบ'}</span></div>
+    <div class="detail-row"><span class="k">การรับทราบแจ้งเตือน</span><span class="v">${ackStatusBadge(a)}</span></div>
     ${(bAlert||mAlert)?`<div class="callout" style="margin-top:12px;">
       ${bAlert?`⏰ ${bAlert.overdue?'เลยกำหนดเปลี่ยนแบตเตอรี่แล้ว':'ใกล้ครบกำหนดเปลี่ยนแบตเตอรี่'} (${Math.abs(bAlert.days)} วัน)<br>`:''}
       ${mAlert?`🛠️ ${mAlert.overdue?'เลยกำหนดบำรุงรักษาแล้ว':'ใกล้ครบกำหนดบำรุงรักษา (ทุก 4 เดือน)'} (${Math.abs(mAlert.days)} วัน)`:''}
@@ -708,7 +751,7 @@ function viewAssets(){
               <td class="mono">${fmtDate(nextMaDue(a))}</td>
               <td style="white-space:normal;min-width:150px;">${maChecklistBadge(a)}</td>
               <td><span class="risk-chip risk-${a.risk_status}">${RISK_LABEL[a.risk_status]}</span></td>
-              <td>${a.acknowledge_status==='Acknowledged'?`<span class="ack-tag">รับทราบแล้ว</span>`:'รอรับทราบ'}</td>
+              <td>${ackStatusBadge(a)}</td>
               <td class="actions-cell">
                 <button class="btn btn-sm btn-danger" data-report-issue="${a.id}">🚨 แจ้งซ่อม</button>
                 ${rowEdit?`<button class="btn btn-sm" data-edit="${a.id}">แก้ไข</button><button class="btn btn-sm btn-danger" data-del="${a.id}">ลบ</button>`:''}
@@ -745,20 +788,24 @@ function alertCard(a,type){
   const kc=info.overdue?'var(--red)':'var(--yellow)';
   const verb=type==='battery'?'เปลี่ยนแบตเตอรี่':'บำรุงรักษา MA (ทุก 4 เดือน)';
   const statusMsg=info.overdue?`เลยกำหนด${verb}มาแล้ว <strong>${Math.abs(info.days)} วัน</strong> (กำหนด ${fmtDate(due)})`:`ใกล้ครบกำหนด${verb}ใน <strong>${info.days} วัน</strong> (กำหนด ${fmtDate(due)})`;
+  const lab=getLab(a.lab_id);
+  const recipients=getNotifyRecipients(a, lab);
   const subject=encodeURIComponent(`แจ้งเตือน${verb} — ${a.asset_id}`);
-  const body=encodeURIComponent(`เรียน ${a.responsible_name||'ผู้รับผิดชอบ'}\n\nระบบแจ้งเตือน${verb}สำหรับเครื่อง UPS ดังนี้\nAsset ID: ${a.asset_id}\nห้องปฏิบัติการ: ${getLab(a.lab_id)?.name||''}\nตำแหน่ง: ${a.location}\nกำหนด: ${fmtDate(due)}\n\nกรุณาดำเนินการและกดรับทราบในระบบทะเบียน UPS\nขอบคุณครับ/ค่ะ`);
-  const mailLink=a.responsible_email?`mailto:${a.responsible_email}?subject=${subject}&body=${body}`:null;
+  const body=encodeURIComponent(`เรียนผู้เกี่ยวข้อง\n\nระบบแจ้งเตือน${verb}สำหรับเครื่อง UPS ดังนี้\nAsset ID: ${a.asset_id}\nห้องปฏิบัติการ: ${lab?.name||''}\nตำแหน่ง: ${a.location}\nกำหนด: ${fmtDate(due)}\n\nกรุณาดำเนินการและกดรับทราบในระบบทะเบียน UPS\nขอบคุณครับ/ค่ะ`);
+  const mailLink=recipients.length?`mailto:${recipients.join(',')}?subject=${subject}&body=${body}`:null;
   const editable=canEditLab(a.lab_id);
+  const st=a.acknowledge_status||'Pending';
   return `
     <div class="alert-card" style="--kc:${kc}">
       <div class="info">
-        <div><b>${a.asset_id}</b> · ${escapeHtml(a.location)} ${currentLabId==='ALL'?`· <span class="helptext">${escapeHtml(getLab(a.lab_id)?.name||'')}</span>`:''}</div>
+        <div><b>${a.asset_id}</b> · ${escapeHtml(a.location)} ${currentLabId==='ALL'?`· <span class="helptext">${escapeHtml(lab?.name||'')}</span>`:''}</div>
         <div class="msg">${statusMsg}</div>
-        <div class="msg">ผู้รับผิดชอบ: ${escapeHtml(a.responsible_name)||'ยังไม่ระบุ'} ${a.acknowledge_status==='Acknowledged'?`<span class="ack-tag" style="margin-right:6px;">รับทราบแล้ว ${fmtDateTime(a.acknowledge_timestamp)}</span>`:''}</div>
+        <div class="msg">แจ้งเตือนไปที่: ${recipients.length?recipients.map(escapeHtml).join(', '):'<span class="helptext">ยังไม่มีอีเมลให้แจ้ง</span>'} ${st!=='Pending'?`<span class="ack-tag${st==='InProgress'?' in-progress':''}" style="margin-right:6px;">${ACK_LABEL[st]} ${fmtDateTime(a.acknowledge_timestamp)}</span>`:''}</div>
       </div>
       <div class="alert-actions">
         ${mailLink?`<a class="btn btn-sm" href="${mailLink}">✉️ ส่งอีเมลแจ้งเตือน</a>`:`<span class="helptext">ไม่มีอีเมลผู้รับผิดชอบ</span>`}
-        ${editable&&a.acknowledge_status!=='Acknowledged'?`<button class="btn btn-sm btn-gold" data-ack="${a.id}">กดรับทราบ</button>`:''}
+        ${editable&&st==='Pending'?`<button class="btn btn-sm btn-gold" data-ack="${a.id}">กดรับทราบ</button>`:''}
+        ${editable&&st==='Acknowledged'?`<button class="btn btn-sm btn-gold" data-start-progress="${a.id}">เริ่มดำเนินงาน</button>`:''}
       </div>
     </div>`;
 }
@@ -790,7 +837,7 @@ function ticketCard(t, showLabCol){
       <div class="info">
         <div><b>${escapeHtml(t.asset_id)}</b> · ${escapeHtml(asset?.location||'')} ${showLabCol?`· <span class="helptext">${escapeHtml(getLab(t.lab_id)?.name||'')}</span>`:''}</div>
         <div class="msg"><strong>เหตุผลที่แจ้ง:</strong> ${escapeHtml(t.reason)||'-'}</div>
-        <div class="msg">แจ้งเมื่อ ${fmtDateTime(t.reported_at)}${t.status==='เสร็จสิ้น'?` · ปิดงานเมื่อ ${fmtDateTime(t.completed_at)}`:''}</div>
+        <div class="msg">แจ้งโดย: ${escapeHtml(t.reporter_name)||'<span class="helptext">ไม่ระบุชื่อ</span>'} · แจ้งเมื่อ ${fmtDateTime(t.reported_at)}${t.status==='เสร็จสิ้น'?` · ปิดงานเมื่อ ${fmtDateTime(t.completed_at)}`:''}</div>
         ${t.technician_notes?`<div class="msg"><strong>ผลดำเนินงาน:</strong> ${escapeHtml(t.technician_notes)}</div>`:''}
         ${(t.action_types&&t.action_types.length)?`<div class="msg">ประเภทงาน: ${t.action_types.map(actionTypeLabel).join(', ')}</div>`:''}
         ${t.pdf_data?`<div class="msg"><a href="${t.pdf_data}" download="${escapeAttr(t.pdf_name||'report.pdf')}">📎 ดาวน์โหลดเอกสารแนบ</a></div>`:t.pdf_link?`<div class="msg"><a href="${escapeAttr(t.pdf_link)}" target="_blank" rel="noopener">📎 เปิดลิงก์เอกสารแนบ</a></div>`:''}
@@ -885,6 +932,77 @@ function viewKnowledge(){
       ดูรายชื่อและเบอร์ติดต่อได้ที่หน้า “ผู้รับผิดชอบห้อง”
       <div style="margin-top:10px;"><button class="btn btn-sm btn-primary" id="btnGoContacts">☎️ ไปที่หน้าผู้รับผิดชอบห้อง</button></div>
     </div>`;
+}
+
+/* =========================================================
+   DATA ENTRY GUIDE — explains every field in the asset form:
+   what it means, what unit/format to use, with an example.
+========================================================= */
+function dataGuideRow(field, meaning, unit, example){
+  return `<tr><td class="mono" style="white-space:nowrap;">${field}</td><td>${meaning}</td><td style="white-space:nowrap;">${unit}</td><td class="mono">${example}</td></tr>`;
+}
+function dataGuideSection(title, rows){
+  return `
+    <div class="settings-card">
+      <h4>${title}</h4>
+      <div class="table-wrap" style="border:none;">
+        <table>
+          <thead><tr><th>ช่องกรอก</th><th>คืออะไร / อธิบาย</th><th>หน่วย / รูปแบบ</th><th>ตัวอย่าง</th></tr></thead>
+          <tbody>${rows.join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+function viewDataGuide(){
+  return `
+    <div class="page-head"><div><h2>📋 วิธีกรอกข้อมูลเครื่อง UPS</h2><p>อธิบายความหมายของแต่ละช่องในฟอร์มเพิ่ม/แก้ไขเครื่อง พร้อมหน่วยและตัวอย่างที่ควรกรอก — เรียงตามลำดับหมวดในฟอร์มจริง</p></div></div>
+
+    <div class="callout blue">
+      <b>หลักการทั่วไป:</b> ถ้าไม่มีข้อมูลจริงในบางช่อง เว้นว่างไว้ได้ ไม่บังคับกรอกครบทุกช่อง (ยกเว้น Asset ID ที่ต้องมีเสมอ) — ข้อมูลบนป้ายสเปกเครื่อง (nameplate) มักมีเกือบทุกอย่างที่ต้องใช้ หรือใช้ปุ่ม “📷 สแกนป้ายเครื่อง (OCR)” ในฟอร์มช่วยกรอกได้บางส่วน
+    </div>
+
+    ${dataGuideSection('1️⃣ ข้อมูลทั่วไป', [
+      dataGuideRow('Asset ID *','รหัสเครื่องที่หน่วยงานตั้งขึ้นเองเพื่ออ้างอิง ต้องไม่ซ้ำกันทั้งระบบ (ทุกห้องรวมกัน)','ข้อความ ตั้งเองตามระบบของหน่วยงาน','UPS-LAB-003'),
+      dataGuideRow('ห้องปฏิบัติการ','ห้องที่เครื่องนี้ติดตั้งอยู่ เลือกจากรายการ','เลือกจากดรอปดาวน์','ห้องปฏิบัติการภูมิคุ้มกันวิทยา'),
+      dataGuideRow('ชั้น','ชั้นของอาคารที่ติดตั้งเครื่อง','ตัวเลข/ข้อความสั้น','3'),
+      dataGuideRow('สถานที่ / จุดติดตั้ง','ตำแหน่งเจาะจงภายในห้อง เช่น ใต้โต๊ะเครื่องไหน','ข้อความอธิบาย','Chula Micro CBC'),
+      dataGuideRow('โหลดจ่ายใช้งาน','กำลังไฟที่ต่อใช้งานจริงกับเครื่อง UPS นี้ (มักดูจากป้าย “Power”)','VA หรือ kVA','2.4 kVA'),
+      dataGuideRow('ยี่ห้อ UPS','ชื่อผู้ผลิต ดูจากโลโก้/หัวป้ายเครื่อง','ข้อความ','Chuphotic'),
+      dataGuideRow('ขนาด UPS (Rating)','พิกัดของเครื่อง มักเป็นแรงดันแบตเตอรี่ หรือ VA/Watt (ดูจากป้าย “Input” หรือ “Battery”)','Vdc, Vac หรือ VA/W','72 Vdc'),
+      dataGuideRow('หมายเลขเครื่อง (Serial)','หมายเลขซีเรียล/S-N บนป้ายเครื่อง ใช้ระบุตัวเครื่องจริง','ตัวอักษร+ตัวเลขตามป้าย','14431UP261103'),
+    ])}
+
+    ${dataGuideSection('2️⃣ สัญญาบำรุงรักษา (ติดต่อนัด MA และเปลี่ยนแบต)', [
+      dataGuideRow('สัญญา','เลขที่สัญญา หรือรายละเอียดสัญญาบำรุงรักษาที่ทำไว้กับบริษัท','ข้อความ/เลขที่สัญญา','สัญญาเลขที่ 68/1234'),
+      dataGuideRow('บริษัท','ชื่อบริษัทผู้รับผิดชอบดูแล/บำรุงรักษาตามสัญญา','ข้อความ','บริษัท ชูโฟติค จำกัด'),
+      dataGuideRow('ผู้รับผิดชอบ (บริษัท)','ชื่อพนักงาน/ช่างของบริษัทที่เป็นผู้ติดต่อหลัก','ข้อความ','คุณสมชาย'),
+      dataGuideRow('Email ผู้รับผิดชอบ','อีเมลของผู้ติดต่อฝั่งบริษัท ใช้ส่งแจ้งเตือนอัตโนมัติ','อีเมล','service@chuphotic.com'),
+    ])}
+
+    ${dataGuideSection('3️⃣ อายุการใช้งาน', [
+      dataGuideRow('ปีที่ติดตั้ง / วันที่ติดตั้ง','ปีหรือวันที่เริ่มใช้งานเครื่องนี้ ใส่แบบไหนก็ได้ตามข้อมูลที่มี','พ.ศ./ค.ศ. หรือ วว/ดด/ปปปป','2567 หรือ 13/12/2566'),
+      dataGuideRow('ระยะเวลาการใช้งาน (ปี)','ใช้งานมาแล้วกี่ปีนับถึงปัจจุบัน (คำนวณเองคร่าวๆ)','จำนวนปี (ตัวเลข)','2'),
+      dataGuideRow('ประมาณการอายุการใช้งาน (ปี)','อายุการใช้งานทั้งหมดที่คาดว่าเครื่องจะใช้ได้ (ตามสเปกผู้ผลิตหรือประสบการณ์)','จำนวนปี (ตัวเลข)','8'),
+    ])}
+
+    ${dataGuideSection('4️⃣ แบตเตอรี่', [
+      dataGuideRow('ขนาดแบตเตอรี่','ขนาด/ความจุแบตเตอรี่ที่ใช้ในเครื่องนี้ (ดูจากป้าย “Battery”)','A หรือ Ah','13A หรือ 7.5Ah'),
+      dataGuideRow('จำนวน','จำนวนก้อนแบตเตอรี่ภายในเครื่อง','จำนวน (ลูก)','1'),
+      dataGuideRow('สถานะความเสี่ยง','ผลประเมินสภาพเครื่อง/แบตในปัจจุบัน','เลือก: ปกติ / เฝ้าระวัง / วิกฤต-บวม','ปกติ'),
+      dataGuideRow('วันที่เปลี่ยนแบตล่าสุด','วันที่เปลี่ยนแบตเตอรี่ครั้งล่าสุดจริง','วันที่ (ปฏิทิน)','23/05/2567'),
+      dataGuideRow('วันที่เปลี่ยนแบตครั้งต่อไป','กำหนดที่ควรเปลี่ยนแบตครั้งถัดไป กด “คำนวณอัตโนมัติ” ให้ระบบบวก 2 ปีให้ได้','วันที่ (ปฏิทิน)','22/05/2570'),
+      dataGuideRow('วันที่ทำ MA ล่าสุด','วันที่ทำการบำรุงรักษา (MA) ครั้งล่าสุดจริง','วันที่ (ปฏิทิน)','01/03/2569'),
+      dataGuideRow('กำหนด MA ครั้งต่อไป','กำหนดที่ควรทำ MA ครั้งถัดไป กด “คำนวณอัตโนมัติ” ให้ระบบบวก 4 เดือนให้ได้','วันที่ (ปฏิทิน)','01/07/2569'),
+    ])}
+
+    ${dataGuideSection('5️⃣ ผู้รับผิดชอบ & ตำแหน่งบนแผนที่', [
+      dataGuideRow('ชื่อผู้รับผิดชอบ','เจ้าหน้าที่ภายในห้องที่ดูแลเครื่องนี้โดยตรง (แยกจากผู้รับผิดชอบห้องภาพรวม)','ข้อความ','นางสาวกัญญา'),
+      dataGuideRow('อีเมลผู้รับผิดชอบ','อีเมลของเจ้าหน้าที่คนนั้น ใช้ส่งแจ้งเตือนอัตโนมัติ','อีเมล','kanya@example.go.th'),
+      dataGuideRow('ตำแหน่ง X บนแผนที่','ตำแหน่งแนวนอนของหมุดบนผังห้อง (0=ซ้ายสุด, 100=ขวาสุด) — ลากหมุดบนแผนที่แทนการพิมพ์เองก็ได้','ตัวเลข 0-100','28'),
+      dataGuideRow('ตำแหน่ง Y บนแผนที่','ตำแหน่งแนวตั้งของหมุดบนผังห้อง (0=บนสุด, 100=ล่างสุด) — ลากหมุดบนแผนที่แทนการพิมพ์เองก็ได้','ตัวเลข 0-100','32'),
+      dataGuideRow('หมายเหตุ','ข้อมูลเพิ่มเติมอื่นๆ ที่ไม่มีช่องเฉพาะ เช่น ข้อสังเกตพิเศษ','ข้อความอิสระ','แบตเตอรี่บวมเล็กน้อย เฝ้าระวัง'),
+    ])}
+  `;
 }
 
 /* =========================================================
@@ -1035,6 +1153,18 @@ function openAssetModal(id){
     <p class="modal-sub">${editing?`Asset ID: <span class="mono">${a.asset_id}</span>`:'กรอกข้อมูลตามแบบฟอร์ม Summary for Thermography Inspection'}</p>
 
     <div class="form-section-title">ข้อมูลทั่วไป</div>
+    <div class="ocr-scan-box">
+      <label>📷 สแกนป้ายเครื่อง (OCR) — ถ่าย/เลือกรูปป้ายสเปกเครื่อง ให้ช่วยกรอกข้อมูลอัตโนมัติ</label>
+      <input type="file" id="f_ocr_image" accept="image/*" capture="environment">
+      <p class="helptext" id="ocrStatus">เลือกรูปแล้วจะให้ตัดกรอบเฉพาะป้ายก่อนอ่าน — ยิ่งครอปแคบเท่าตัวป้าย ยิ่งอ่านแม่นและเร็วขึ้น ไม่สมบูรณ์ 100% กรุณาตรวจสอบทุกช่องก่อนบันทึกเสมอ</p>
+      <div id="ocrProgressWrap" style="display:none;margin-top:8px;">
+        <div style="height:6px;border-radius:4px;background:var(--line);overflow:hidden;"><div id="ocrProgressBar" style="height:100%;width:0%;background:var(--brand);transition:width .2s;"></div></div>
+      </div>
+      <details id="ocrRawWrap" style="display:none;margin-top:8px;">
+        <summary class="helptext" style="cursor:pointer;">ดูข้อความดิบที่อ่านได้ทั้งหมด (สำหรับตรวจสอบ)</summary>
+        <pre id="ocrRawText" style="white-space:pre-wrap;font-size:11px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:8px;margin-top:6px;max-height:140px;overflow:auto;"></pre>
+      </details>
+    </div>
     <div class="form-grid">
       <div class="form-field"><label>Asset ID *</label><input id="f_asset_id" value="${editing?escapeAttr(a.asset_id):''}" placeholder="UPS-LAB-003"></div>
       <div class="form-field"><label>ห้องปฏิบัติการ</label>${labSelectHtml}</div>
@@ -1134,6 +1264,229 @@ function openAssetModal(id){
     applyHighlight();
     sel.addEventListener('change', applyHighlight);
   });
+  document.getElementById('f_ocr_image')?.addEventListener('change', (e)=>openOcrCropStage(e.target.files[0]));
+}
+
+/* =========================================================
+   OCR NAMEPLATE SCAN — best-effort auto-fill from a photo of the
+   UPS spec label, using Tesseract.js (runs entirely in the browser,
+   no server/API key, no data ever leaves the device).
+   Flow: pick photo → drag a crop box over just the label → image is
+   cropped + contrast-enhanced client-side → OCR runs on that smaller,
+   cleaner image (faster + more accurate than the whole photo) → only
+   empty fields get filled, and each one is highlighted so the person
+   knows exactly what to double-check before saving.
+========================================================= */
+let ocrCropState=null;
+function openOcrCropStage(file){
+  if(!file) return;
+  const url=URL.createObjectURL(file);
+  document.getElementById('ocrCropBody').innerHTML=`
+    <h3>ตัดกรอบเฉพาะป้ายก่อนอ่าน</h3>
+    <p class="modal-sub">ลากมุมกรอบให้ครอบเฉพาะป้ายสเปก/ป้ายติดต่อที่ต้องการ ยิ่งแคบเท่าตัวป้าย ยิ่งอ่านแม่นและเร็วขึ้น</p>
+    <div id="cropStageWrap"><img id="cropImg" src="${url}"><div id="cropBox">
+      <div class="crop-handle" data-corner="nw"></div>
+      <div class="crop-handle" data-corner="ne"></div>
+      <div class="crop-handle" data-corner="sw"></div>
+      <div class="crop-handle" data-corner="se"></div>
+    </div></div>
+    <div class="modal-foot">
+      <button class="btn" id="btnCropCancel">ยกเลิก</button>
+      <button class="btn" id="btnCropSkip">ใช้ทั้งภาพ (ไม่ตัด)</button>
+      <button class="btn btn-primary" id="btnCropConfirm">✂️ ตัดและอ่านข้อความ</button>
+    </div>`;
+  document.getElementById('ocrCropBg').classList.add('open');
+
+  const img=document.getElementById('cropImg');
+  img.onload=()=>initCropBox(img);
+  if(img.complete && img.naturalWidth) initCropBox(img);
+  document.getElementById('btnCropCancel').onclick=closeOcrCropStage;
+  document.getElementById('btnCropSkip').onclick=()=>confirmCrop(true);
+  document.getElementById('btnCropConfirm').onclick=()=>confirmCrop(false);
+}
+function closeOcrCropStage(){
+  document.getElementById('ocrCropBg').classList.remove('open');
+  const img=document.getElementById('cropImg');
+  if(img && img.src) URL.revokeObjectURL(img.src);
+  ocrCropState=null;
+  const fileInput=document.getElementById('f_ocr_image');
+  if(fileInput) fileInput.value='';
+}
+function initCropBox(img){
+  const wrap=document.getElementById('cropStageWrap');
+  const box=document.getElementById('cropBox');
+  const wrapRect=wrap.getBoundingClientRect();
+  // Default crop box: centered, 80% of the image
+  const w=wrapRect.width*0.8, h=wrapRect.height*0.8;
+  const x=(wrapRect.width-w)/2, y=(wrapRect.height-h)/2;
+  ocrCropState={x,y,w,h,wrapW:wrapRect.width,wrapH:wrapRect.height,imgNatW:img.naturalWidth,imgNatH:img.naturalHeight};
+  renderCropBox();
+  wireCropDrag();
+}
+function renderCropBox(){
+  const box=document.getElementById('cropBox');
+  const s=ocrCropState;
+  box.style.left=s.x+'px'; box.style.top=s.y+'px'; box.style.width=s.w+'px'; box.style.height=s.h+'px';
+}
+function wireCropDrag(){
+  const box=document.getElementById('cropBox');
+  const wrap=document.getElementById('cropStageWrap');
+  function clamp(){
+    const s=ocrCropState;
+    s.w=Math.max(30, Math.min(s.w, s.wrapW-s.x));
+    s.h=Math.max(30, Math.min(s.h, s.wrapH-s.y));
+    s.x=Math.max(0, Math.min(s.x, s.wrapW-s.w));
+    s.y=Math.max(0, Math.min(s.y, s.wrapH-s.h));
+  }
+  function startDrag(ev, mode, corner){
+    ev.preventDefault();
+    const startPoint=ev.touches?ev.touches[0]:ev;
+    const startX=startPoint.clientX, startY=startPoint.clientY;
+    const orig=Object.assign({}, ocrCropState);
+    function move(mv){
+      const p=mv.touches?mv.touches[0]:mv;
+      const dx=p.clientX-startX, dy=p.clientY-startY;
+      const s=ocrCropState;
+      if(mode==='move'){ s.x=orig.x+dx; s.y=orig.y+dy; }
+      else{
+        if(corner.includes('w')){ s.x=orig.x+dx; s.w=orig.w-dx; }
+        if(corner.includes('e')){ s.w=orig.w+dx; }
+        if(corner.includes('n')){ s.y=orig.y+dy; s.h=orig.h-dy; }
+        if(corner.includes('s')){ s.h=orig.h+dy; }
+      }
+      clamp(); renderCropBox();
+    }
+    function up(){
+      document.removeEventListener('mousemove',move); document.removeEventListener('mouseup',up);
+      document.removeEventListener('touchmove',move); document.removeEventListener('touchend',up);
+    }
+    document.addEventListener('mousemove',move); document.addEventListener('mouseup',up);
+    document.addEventListener('touchmove',move,{passive:false}); document.addEventListener('touchend',up);
+  }
+  box.addEventListener('mousedown',(e)=>{ if(!e.target.classList.contains('crop-handle')) startDrag(e,'move'); });
+  box.addEventListener('touchstart',(e)=>{ if(!e.target.classList.contains('crop-handle')) startDrag(e,'move'); },{passive:false});
+  box.querySelectorAll('.crop-handle').forEach(h=>{
+    h.addEventListener('mousedown',(e)=>{ e.stopPropagation(); startDrag(e,'resize',h.dataset.corner); });
+    h.addEventListener('touchstart',(e)=>{ e.stopPropagation(); startDrag(e,'resize',h.dataset.corner); },{passive:false});
+  });
+}
+/** Crops (unless useWhole) + grayscale/contrast-enhances the image on a
+ *  canvas, then hands it straight to Tesseract (no re-encoding needed). */
+function confirmCrop(useWhole){
+  const img=document.getElementById('cropImg');
+  const s=ocrCropState;
+  if(!s){ useWhole=true; }
+  const scaleX=s?img.naturalWidth/s.wrapW:1, scaleY=s?img.naturalHeight/s.wrapH:1;
+  const canvas=document.createElement('canvas');
+  let sx,sy,sw,sh;
+  if(useWhole||!s){ sx=0; sy=0; sw=img.naturalWidth; sh=img.naturalHeight; }
+  else{ sx=s.x*scaleX; sy=s.y*scaleY; sw=s.w*scaleX; sh=s.h*scaleY; }
+  canvas.width=sw; canvas.height=sh;
+  const ctx=canvas.getContext('2d');
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+  preprocessCanvasForOcr(canvas);
+  closeOcrCropStage();
+  runNameplateOcr(canvas);
+}
+function preprocessCanvasForOcr(canvas){
+  const ctx=canvas.getContext('2d');
+  const imgData=ctx.getImageData(0,0,canvas.width,canvas.height);
+  const d=imgData.data;
+  for(let i=0;i<d.length;i+=4){
+    const gray=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+    const contrasted=Math.min(255,Math.max(0,(gray-128)*1.35+128));
+    d[i]=d[i+1]=d[i+2]=contrasted;
+  }
+  ctx.putImageData(imgData,0,0);
+  return canvas;
+}
+async function runNameplateOcr(imageSource){
+  const box=document.getElementById('f_ocr_image')?.closest('.ocr-scan-box');
+  const statusEl=document.getElementById('ocrStatus');
+  const progWrap=document.getElementById('ocrProgressWrap');
+  const progBar=document.getElementById('ocrProgressBar');
+  if(typeof Tesseract==='undefined'){
+    if(statusEl) statusEl.textContent='โหลดโมดูลอ่านภาพไม่สำเร็จ (ต้องมีอินเทอร์เน็ต) กรุณากรอกเองหรือลองใหม่';
+    return;
+  }
+  box?.classList.add('is-busy');
+  if(progWrap) progWrap.style.display='block';
+  if(progBar) progBar.style.width='0%';
+  if(statusEl) statusEl.textContent='⏳ กำลังเตรียมโมดูลอ่านข้อความ...';
+  try{
+    const { data:{ text } } = await Tesseract.recognize(imageSource, 'eng', {
+      logger: (m)=>{
+        if(m.status==='recognizing text' && progBar){ progBar.style.width=Math.round(m.progress*100)+'%'; }
+        if(statusEl && m.status) statusEl.textContent = `⏳ ${m.status}... ${m.progress?Math.round(m.progress*100)+'%':''}`;
+      }
+    });
+    const filledCount=applyOcrToForm(text);
+    const rawWrap=document.getElementById('ocrRawWrap');
+    const rawText=document.getElementById('ocrRawText');
+    if(rawWrap && rawText){ rawText.textContent=text.trim()||'(ไม่พบข้อความ)'; rawWrap.style.display='block'; }
+    if(statusEl) statusEl.textContent = filledCount>0
+      ? `✅ อ่านข้อมูลสำเร็จ เติมให้ ${filledCount} ช่อง (ไฮไลต์สีเหลือง) — ตรวจสอบให้ตรงก่อนบันทึก`
+      : `อ่านข้อความได้ แต่ไม่พบข้อมูลที่จับคู่ได้ชัดเจน กรุณากรอกเอง (ดูข้อความดิบด้านล่างได้)`;
+  }catch(err){
+    console.error(err);
+    if(statusEl) statusEl.textContent='อ่านข้อมูลจากรูปไม่สำเร็จ กรุณากรอกเองหรือลองสแกนใหม่';
+  }finally{
+    box?.classList.remove('is-busy');
+    if(progWrap) progWrap.style.display='none';
+  }
+}
+function parseNameplateText(text){
+  const result={};
+  const lines=text.split('\n').map(l=>l.trim()).filter(Boolean);
+  if(lines.length){
+    const first=lines[0].replace(/[^A-Za-z0-9 ]/g,'').trim();
+    if(first.length>=3 && first.length<=24) result.brand=first;
+  }
+  const modelM=text.match(/Model\s*[:\-]?\s*([^\n]+)/i);
+  if(modelM) result.model=modelM[1].trim();
+  const inputM=text.match(/Input\s*[:\-]?\s*([0-9]+\s*Va?c[^\n]*)/i);
+  const powerM=text.match(/Power\s*[:\-]?\s*([^\n]+)/i);
+  if(inputM) result.ups_rating=inputM[1].trim();
+  if(powerM) result.load_va=powerM[1].trim();
+  const snM=text.match(/S\s*\/?\s*N\s*[:\-]?\s*([A-Z0-9\-]{4,})/i);
+  if(snM) result.serial_number=snM[1].trim();
+  const battM=text.match(/Battery\s*[:\-]?[^\n]*?(?<![A-Za-z])(\d+(?:\.\d+)?\s*Ah\b|\d+(?:\.\d+)?\s*A(?![a-zA-Z]))/);
+  if(battM) result.battery_size=battM[1].trim();
+  const emails=text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/g);
+  if(emails && emails.length) result.contract_contact_email=emails[0];
+  const phones=text.match(/0[\d\- ]{7,12}\d/g);
+  if(phones && phones.length) result.phones=[...new Set(phones.map(p=>p.trim()))];
+  return result;
+}
+function applyOcrToForm(text){
+  const parsed=parseNameplateText(text);
+  let filled=0;
+  const setIfEmpty=(id,val)=>{
+    const el=document.getElementById(id);
+    if(el && !el.value && val){
+      el.value=val; filled++;
+      el.classList.add('ocr-filled');
+      el.addEventListener('input', ()=>el.classList.remove('ocr-filled'), {once:true});
+    }
+  };
+  setIfEmpty('f_brand', parsed.brand);
+  setIfEmpty('f_rating', parsed.ups_rating);
+  setIfEmpty('f_load', parsed.load_va);
+  setIfEmpty('f_serial', parsed.serial_number);
+  setIfEmpty('f_batt_size', parsed.battery_size);
+  setIfEmpty('f_contract_contact_email', parsed.contract_contact_email);
+  setIfEmpty('f_contract_company', parsed.brand);
+  const notesEl=document.getElementById('f_notes');
+  const extraNotes=[];
+  if(parsed.model) extraNotes.push(`[OCR] Model: ${parsed.model}`);
+  if(parsed.phones && parsed.phones.length) extraNotes.push(`[OCR] เบอร์ติดต่อจากป้าย: ${parsed.phones.join(', ')}`);
+  if(notesEl && extraNotes.length){
+    notesEl.value = (notesEl.value ? notesEl.value+'\n' : '') + extraNotes.join('\n');
+    notesEl.classList.add('ocr-filled');
+    notesEl.addEventListener('input', ()=>notesEl.classList.remove('ocr-filled'), {once:true});
+    filled++;
+  }
+  return filled;
 }
 function gatherMaChecklist(){
   const result={};
@@ -1183,7 +1536,30 @@ function saveAssetFromModal(id){
     y:clamp(Number(document.getElementById('f_y').value)||50,0,100),
     notes:document.getElementById('f_notes').value.trim(),
   };
+  const original=id?assets.find(x=>x.id===id):null;
+  const batteryChanged = original && original.last_battery_date!==data.last_battery_date;
+  const maChanged = original && original.last_ma_date!==data.last_ma_date;
+  if(batteryChanged || maChanged){
+    data.acknowledge_status='Pending';
+    data.acknowledge_timestamp=null;
+  }
   saveAssetToFirestore(id, assetIdVal, data);
+  if(batteryChanged || maChanged){
+    const lab=getLab(labIdVal);
+    const recipients=getNotifyRecipients(data, lab);
+    const doneLines=[];
+    if(batteryChanged) doneLines.push(`- เปลี่ยนแบตเตอรี่แล้ว (วันที่ ${fmtDate(data.last_battery_date)}) กำหนดครั้งต่อไป ${fmtDate(nextBatteryDue(data))}`);
+    if(maChanged) doneLines.push(`- ทำ MA แล้ว (วันที่ ${fmtDate(data.last_ma_date)}) กำหนดครั้งต่อไป ${fmtDate(nextMaDue(data))}`);
+    sendClosureMailto(recipients, `✅ [ปิดงานแล้ว] ${assetIdVal}`, [
+      'เรียนผู้เกี่ยวข้อง', '',
+      'มีการอัปเดตข้อมูลต่อไปนี้ในระบบทะเบียน UPS:',
+      `Asset ID: ${assetIdVal}`,
+      `ห้องปฏิบัติการ: ${lab?.name||labIdVal}`, '',
+      ...doneLines, '',
+      'ไม่ต้องดำเนินการเพิ่มเติม ระบบจะไม่ส่งอีเมลแจ้งเตือนซ้ำจนกว่าจะใกล้ครบกำหนดรอบถัดไป',
+      'ขอบคุณครับ/ค่ะ'
+    ]);
+  }
 }
 async function saveAssetToFirestore(id, assetIdVal, data){
   try{
@@ -1257,6 +1633,7 @@ function openReportIssueModal(assetId){
   document.getElementById('modalBody').innerHTML=`
     <h3>🚨 แจ้งซ่อมด่วน — ${a.asset_id}</h3>
     <p class="modal-sub">${escapeHtml(a.location)||''}</p>
+    <div class="form-field full"><label>ชื่อผู้แจ้ง *</label><input type="text" id="f_issue_reporter" placeholder="ชื่อ-นามสกุล หรือหน่วยงาน"></div>
     <div class="form-field full"><label>เหตุผล / อาการที่พบ *</label><textarea id="f_issue_reason" rows="4" placeholder="เช่น เครื่องมีเสียงร้องเตือนตลอดเวลา, ไฟไม่ติด, มีกลิ่นไหม้..."></textarea></div>
     <p class="helptext" id="issueError" style="color:var(--red);"></p>
     <div class="modal-foot">
@@ -1268,22 +1645,25 @@ function openReportIssueModal(assetId){
   document.getElementById('btnSubmitIssue').onclick=()=>submitIssueReport(a);
 }
 async function submitIssueReport(a){
+  const reporterName=document.getElementById('f_issue_reporter').value.trim();
   const reason=document.getElementById('f_issue_reason').value.trim();
+  if(!reporterName){ document.getElementById('issueError').textContent='กรุณาระบุชื่อผู้แจ้ง'; return; }
   if(!reason){ document.getElementById('issueError').textContent='กรุณาระบุเหตุผล/อาการที่พบ'; return; }
   try{
     await db.collection(FS.tickets).add({
-      asset_id:a.asset_id, lab_id:a.lab_id, reason,
+      asset_id:a.asset_id, lab_id:a.lab_id, reason, reporter_name:reporterName,
       status:'รอดำเนินการ', reported_at:new Date().toISOString(),
       technician_notes:'', action_types:[], completed_at:null,
-      pdf_name:'', pdf_data:'', pdf_link:''
+      pdf_name:'', pdf_data:'', pdf_link:'', last_reminder_sent:null
     });
     closeModal();
-    const to = a.contract_contact_email || getLab(a.lab_id)?.contact_email || '';
-    if(to){
+    const lab=getLab(a.lab_id);
+    const to=getNotifyRecipients(a, lab);
+    if(to.length){
       toast('แจ้งซ่อมเรียบร้อย กำลังเปิดอีเมลแจ้งช่าง...');
       const subject=encodeURIComponent(`🚨 แจ้งซ่อมด่วน — ${a.asset_id}`);
-      const body=encodeURIComponent(`เรียนช่าง/ผู้เกี่ยวข้อง\n\nมีการแจ้งซ่อมด่วนสำหรับเครื่อง UPS ดังนี้\nAsset ID: ${a.asset_id}\nห้องปฏิบัติการ: ${getLab(a.lab_id)?.name||a.lab_id}\nตำแหน่ง: ${a.location}\n\nอาการ/เหตุผลที่แจ้ง:\n${reason}\n\nกรุณาดำเนินการโดยเร็วและปิดงานในระบบทะเบียน UPS หลังดำเนินการเสร็จสิ้น\nขอบคุณครับ/ค่ะ`);
-      setTimeout(()=>{ window.location.href=`mailto:${to}?subject=${subject}&body=${body}`; }, 300);
+      const body=encodeURIComponent(`เรียนช่าง/ผู้เกี่ยวข้อง\n\nมีการแจ้งซ่อมด่วนสำหรับเครื่อง UPS ดังนี้\nAsset ID: ${a.asset_id}\nห้องปฏิบัติการ: ${lab?.name||a.lab_id}\nตำแหน่ง: ${a.location}\nแจ้งโดย: ${reporterName}\n\nอาการ/เหตุผลที่แจ้ง:\n${reason}\n\nกรุณาดำเนินการโดยเร็วและปิดงานในระบบทะเบียน UPS หลังดำเนินการเสร็จสิ้น\nระบบจะส่งอีเมลแจ้งเตือนซ้ำทุกวันจนกว่าจะปิดงาน\nขอบคุณครับ/ค่ะ`);
+      setTimeout(()=>{ window.location.href=`mailto:${to.join(',')}?subject=${subject}&body=${body}`; }, 300);
     } else {
       toast('บันทึกการแจ้งซ่อมแล้ว แต่ยังไม่มีอีเมลช่าง/ผู้รับผิดชอบให้ส่งถึง — กรุณาเพิ่มอีเมลในทะเบียนเครื่องนี้หรือหน้าผู้รับผิดชอบห้อง');
     }
@@ -1392,17 +1772,38 @@ async function submitTechEntry(a, openTicket){
     if(actionTypes.includes('battery')){
       await db.collection(FS.assets).doc(a.id).update({
         last_battery_date: actionDate,
-        next_battery_date: addYearsISO(actionDate, 2)
+        next_battery_date: addYearsISO(actionDate, 2),
+        acknowledge_status:'Pending', acknowledge_timestamp:null
       });
     }
     if(actionTypes.includes('ma')){
       await db.collection(FS.assets).doc(a.id).update({
         last_ma_date: actionDate,
-        next_ma_date: addMonthsISO(actionDate, 4)
+        next_ma_date: addMonthsISO(actionDate, 4),
+        acknowledge_status:'Pending', acknowledge_timestamp:null
       });
     }
     closeModal();
     toast('บันทึกผลการดำเนินงานเรียบร้อย ขอบคุณครับ/ค่ะ');
+
+    const lab=getLab(a.lab_id);
+    const recipients=getNotifyRecipients(a, lab);
+    const doneLines=[];
+    if(actionTypes.includes('battery')) doneLines.push(`- เปลี่ยนแบตเตอรี่แล้ว (วันที่ ${fmtDate(actionDate)}) กำหนดครั้งต่อไป ${fmtDate(addYearsISO(actionDate,2))}`);
+    if(actionTypes.includes('ma')) doneLines.push(`- ทำ MA แล้ว (วันที่ ${fmtDate(actionDate)}) กำหนดครั้งต่อไป ${fmtDate(addMonthsISO(actionDate,4))}`);
+    if(actionTypes.includes('repair')) doneLines.push(`- ซ่อมแซมเรียบร้อย (วันที่ ${fmtDate(actionDate)})`);
+    if(openTicket) doneLines.push(`- ปิดงานแจ้งซ่อม: "${openTicket.reason}" (แจ้งโดย ${openTicket.reporter_name||'ไม่ระบุ'})`);
+    sendClosureMailto(recipients, `✅ [ปิดงานแล้ว] ${a.asset_id}`, [
+      'เรียนผู้เกี่ยวข้อง', '',
+      `ดำเนินการเสร็จสิ้นสำหรับเครื่อง UPS ต่อไปนี้:`,
+      `Asset ID: ${a.asset_id}`,
+      `ห้องปฏิบัติการ: ${lab?.name||a.lab_id}`,
+      `ตำแหน่ง: ${a.location}`, '',
+      ...doneLines, '',
+      `รายละเอียด: ${notes}`, '',
+      'ไม่ต้องดำเนินการเพิ่มเติม ระบบจะไม่ส่งอีเมลแจ้งเตือนซ้ำสำหรับรายการนี้อีกจนกว่าจะใกล้ครบกำหนดรอบถัดไป',
+      'ขอบคุณครับ/ค่ะ'
+    ]);
   }catch(e){ console.error(e); toast('บันทึกไม่สำเร็จ — ตรวจสอบการเชื่อมต่อฐานข้อมูล'); }
 }
 
@@ -1501,7 +1902,23 @@ function afterRender(){
   document.querySelectorAll('[data-close-ticket]').forEach(el=>el.addEventListener('click', async ()=>{
     const t=tickets.find(x=>x.id===el.dataset.closeTicket);
     if(!t||!canEditLab(t.lab_id)){ toast('คุณไม่มีสิทธิ์แก้ไขห้องนี้'); return; }
-    try{ await db.collection(FS.tickets).doc(t.id).update({status:'เสร็จสิ้น', completed_at:new Date().toISOString()}); toast('ปิดงานแจ้งซ่อมแล้ว'); }
+    try{
+      await db.collection(FS.tickets).doc(t.id).update({status:'เสร็จสิ้น', completed_at:new Date().toISOString()});
+      toast('ปิดงานแจ้งซ่อมแล้ว');
+      const asset=assets.find(a=>a.asset_id===t.asset_id);
+      const lab=getLab(t.lab_id);
+      const recipients=asset?getNotifyRecipients(asset, lab):(lab?.contact_email?[lab.contact_email]:[]);
+      sendClosureMailto(recipients, `✅ [ปิดงานแล้ว] แจ้งซ่อม — ${t.asset_id}`, [
+        'เรียนผู้เกี่ยวข้อง', '',
+        `รายการแจ้งซ่อมด่วนสำหรับเครื่อง UPS ต่อไปนี้ได้รับการแก้ไขเรียบร้อยแล้ว:`,
+        `Asset ID: ${t.asset_id}`,
+        `ห้องปฏิบัติการ: ${lab?.name||t.lab_id}`,
+        `แจ้งโดย: ${t.reporter_name||'ไม่ระบุ'}`,
+        `อาการ/เหตุผลที่แจ้ง: ${t.reason||'-'}`, '',
+        'ไม่ต้องดำเนินการเพิ่มเติม ระบบจะหยุดส่งอีเมลแจ้งเตือนซ้ำสำหรับรายการนี้',
+        'ขอบคุณครับ/ค่ะ'
+      ]);
+    }
     catch(e){ toast('บันทึกไม่สำเร็จ'); }
   }));
   document.querySelectorAll('[data-del-ticket]').forEach(el=>el.addEventListener('click', async ()=>{
@@ -1518,6 +1935,14 @@ function afterRender(){
     try{
       await db.collection(FS.assets).doc(a.id).update({ acknowledge_status:'Acknowledged', acknowledge_timestamp:new Date().toISOString() });
       toast('บันทึกการรับทราบและเวลาแล้ว');
+    }catch(e){ toast('บันทึกไม่สำเร็จ'); }
+  }));
+  document.querySelectorAll('[data-start-progress]').forEach(el=>el.addEventListener('click', async ()=>{
+    const a=assets.find(x=>x.id===el.dataset.startProgress);
+    if(!a||!canEditLab(a.lab_id)){ toast('คุณไม่มีสิทธิ์แก้ไขห้องนี้'); return; }
+    try{
+      await db.collection(FS.assets).doc(a.id).update({ acknowledge_status:'InProgress', acknowledge_timestamp:new Date().toISOString() });
+      toast('ตั้งสถานะเป็น "กำลังดำเนินงาน" แล้ว');
     }catch(e){ toast('บันทึกไม่สำเร็จ'); }
   }));
 
@@ -1742,3 +2167,4 @@ initApp();
 </script>
 </body>
 </html>
+
