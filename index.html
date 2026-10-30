@@ -164,6 +164,9 @@
   .ocr-scan-box .helptext{margin-top:6px;}
   .ocr-scan-box.is-busy{opacity:.7;pointer-events:none;}
   .ocr-filled{background:#FFF9E0 !important;}
+  .row-clickable{cursor:pointer;}
+  .row-clickable:hover td{background:#F1F8EE !important;}
+  .asset-link{color:var(--brand);text-decoration:underline dotted;text-underline-offset:3px;font-weight:600;}
   #cropStageWrap{position:relative;max-width:100%;overflow:hidden;border:1px solid var(--line);border-radius:8px;background:#111;touch-action:none;}
   #cropStageWrap img{display:block;max-width:100%;user-select:none;-webkit-user-drag:none;}
   #cropBox{position:absolute;border:2px dashed var(--gold);background:rgba(201,162,39,.18);cursor:move;}
@@ -250,7 +253,7 @@
    public/client-side — real protection comes from Firestore Security
    Rules (see firestore.rules in the setup package), not from hiding this. */
 const firebaseConfig = {
-  apiKey: "lflb nnrm pjdr vjew",
+  apiKey: "AIzaSyAWhxKizhMGDFuSDEWVrPE2cpDl8Jn1V8M",
   authDomain: "ups-mdcu-3a6bc.firebaseapp.com",
   projectId: "ups-mdcu-3a6bc",
   storageBucket: "ups-mdcu-3a6bc.firebasestorage.app",
@@ -258,7 +261,7 @@ const firebaseConfig = {
   appId: "1:442022652746:web:41b69ff3bdad34f101efb3",
   measurementId: "G-ND8MLSE6QJ"
 };
-const FS={ assets:'assets', labs:'labs', mapBgs:'map_backgrounds', settings:'app_settings', tickets:'repair_tickets' };
+const FS={ assets:'assets', labs:'labs', mapBgs:'map_backgrounds', settings:'app_settings', tickets:'repair_tickets', activity:'activity_log' };
 const SETTINGS_DOC_ID='main';
 let db=null;
 let hashRouteHandled=false;
@@ -270,6 +273,7 @@ let assets=[];
 let labs=[];
 let mapBgs={};
 let tickets=[];
+let activityLog=[];
 let settings={ qrBaseUrl:'', masterPasswordHash:null };
 let session={ role:'public' };
 let currentLabId=null;
@@ -381,10 +385,27 @@ function attachListeners(){
   db.collection(FS.tickets).onSnapshot(snap=>{
     tickets=snap.docs.map(d=>Object.assign({
       status:'รอดำเนินการ', reason:'', technician_notes:'', action_types:[],
-      pdf_name:'', pdf_data:'', pdf_link:'', completed_at:null
+      pdf_name:'', pdf_data:'', pdf_link:'', completed_at:null, completed_by:''
     }, d.data(), { id:d.id }));
     render();
   }, err=>{ console.error(err); });
+
+  db.collection(FS.activity).onSnapshot(snap=>{
+    activityLog=snap.docs.map(d=>Object.assign({ actor_name:'', lab_id:null, asset_id:null, action_type:'', description:'' }, d.data(), { id:d.id }));
+    render();
+  }, err=>{ console.error(err); });
+}
+async function logActivity(action_type, description, opts={}){
+  try{
+    const actor_name = opts.actorName || session.actor_name || (session.role==='master'?'ผู้ดูแลระบบรวม':session.role==='lab'?`ผู้ดูแล ${getLab(session.labId)?.name||session.labId}`:'ไม่ระบุ');
+    await db.collection(FS.activity).add({
+      timestamp:new Date().toISOString(),
+      actor_name, role:session.role||'public',
+      lab_id: opts.labId || (session.role==='lab'?session.labId:null) || null,
+      asset_id: opts.assetId || null,
+      action_type, description
+    });
+  }catch(e){ console.error('logActivity failed', e); }
 }
 
 /* =========================================================
@@ -425,6 +446,7 @@ function canEditCurrentScope(){ return currentLabId==='ALL' ? session.role==='ma
 function getLab(id){ return labs.find(l=>l.id===id); }
 function getScopedAssets(){ return currentLabId==='ALL' ? assets : assets.filter(a=>a.lab_id===currentLabId); }
 function getScopedTickets(){ return currentLabId==='ALL' ? tickets : tickets.filter(t=>t.lab_id===currentLabId); }
+function getScopedActivity(){ return currentLabId==='ALL' ? activityLog : activityLog.filter(x=>x.lab_id===currentLabId || !x.lab_id); }
 function roleLabel(){
   if(session.role==='master') return '🛡️ ผู้ดูแลระบบรวม (แก้ไขได้ทุกห้อง)';
   if(session.role==='lab') return `🔧 ผู้ดูแล: ${getLab(session.labId)?.name||session.labId}`;
@@ -500,6 +522,7 @@ const NAV_ITEMS=[
   {id:'contacts',label:'ผู้รับผิดชอบห้อง',icon:'☎️'},
   {id:'knowledge',label:'ความรู้เกี่ยวกับ UPS',icon:'📘'},
   {id:'dataguide',label:'วิธีกรอกข้อมูล',icon:'📋'},
+  {id:'activitylog',label:'ประวัติการใช้งาน',icon:'📜'},
   {id:'settings',label:'ตั้งค่า / ผู้ดูแลระบบ',icon:'⚙️'},
 ];
 function renderLabSwitcher(){
@@ -586,6 +609,7 @@ function render(){
   else if(currentView==='contacts') main.innerHTML=viewContacts();
   else if(currentView==='knowledge') main.innerHTML=viewKnowledge();
   else if(currentView==='dataguide') main.innerHTML=viewDataGuide();
+  else if(currentView==='activitylog') main.innerHTML=viewActivityLog();
   else if(currentView==='settings') main.innerHTML=viewSettings();
   afterRender();
 }
@@ -659,8 +683,25 @@ function viewDashboard(){
       <div class="detail-card" id="detailCard">${renderDetailCard()}</div>
     </div>`;
 }
-function renderDetailCard(){
-  const a=assets.find(x=>x.id===selectedAssetId);
+function openAssetDetailModal(id){
+  const a=assets.find(x=>x.id===id); if(!a) return;
+  const body=document.getElementById('modalBody');
+  body.classList.remove('narrow');
+  body.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;">
+      <span class="helptext">ข้อมูลเครื่อง — มุมมองเดียวกับตอนสแกน QR · ${escapeHtml(getLab(a.lab_id)?.name||'')}</span>
+      <button class="btn btn-sm" id="btnCloseDetail">ปิด</button>
+    </div>
+    ${renderDetailCard(id,{inModal:true})}`;
+  document.getElementById('modalBg').classList.add('open');
+  document.getElementById('btnCloseDetail').onclick=closeModal;
+  body.querySelectorAll('[data-edit]').forEach(el=>el.onclick=()=>openAssetModal(el.dataset.edit));
+  body.querySelectorAll('[data-showqr]').forEach(el=>el.onclick=()=>openQrModal(el.dataset.showqr));
+  body.querySelectorAll('[data-report-issue]').forEach(el=>el.onclick=()=>openReportIssueModal(el.dataset.reportIssue));
+  body.querySelectorAll('[data-tech-entry]').forEach(el=>el.onclick=()=>openTechCodePrompt(el.dataset.techEntry));
+}
+function renderDetailCard(assetId, opts={}){
+  const a=assets.find(x=>x.id===(assetId||selectedAssetId));
   if(!a) return `<div class="detail-empty">เลือกหมุดบนแผนผัง<br>เพื่อดูรายละเอียดเครื่อง</div>`;
   const bAlert=batteryAlertLevel(a), mAlert=maAlertLevel(a);
   const editable=canEditLab(a.lab_id);
@@ -685,7 +726,7 @@ function renderDetailCard(){
     </div>`:''}
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
       ${editable?`<button class="btn btn-sm" data-edit="${a.id}">แก้ไข</button>`:''}
-      <button class="btn btn-sm" data-view-in-table="${a.id}">ดูในตาราง</button>
+      ${opts.inModal?'':`<button class="btn btn-sm" data-view-in-table="${a.id}">ดูในตาราง</button>`}
       <button class="btn btn-sm" data-showqr="${a.id}">QR Code</button>
       ${a.contract_contact_email?`<a class="btn btn-sm" href="mailto:${escapeAttr(a.contract_contact_email)}?subject=${encodeURIComponent('นัดหมาย MA / เปลี่ยนแบตเตอรี่ — '+a.asset_id)}">✉️ ติดต่อบริษัทนัด MA/เปลี่ยนแบต</a>`:''}
       <button class="btn btn-sm btn-danger" data-report-issue="${a.id}">🚨 แจ้งซ่อมด่วน</button>
@@ -703,7 +744,7 @@ function viewAssets(){
   const allSelected=scoped.length>0 && scoped.every(a=>selectedIds.has(a.id));
   return `
     <div class="page-head">
-      <div><h2>ทะเบียนเครื่อง UPS ${showLabCol?'(ทุกห้อง)':''}</h2><p>ติ๊กเลือกแถวเพื่อส่งออกเป็น Excel หรือพิมพ์ QR — ${editable?'สามารถเพิ่ม/แก้ไข/ลบได้':'โหมดดูอย่างเดียว'}</p></div>
+      <div><h2>ทะเบียนเครื่อง UPS ${showLabCol?'(ทุกห้อง)':''}</h2><p>คลิกที่แถวเพื่อดูรายละเอียดเครื่อง (เหมือนตอนสแกน QR) · ติ๊กเลือกแถวเพื่อส่งออก Excel หรือพิมพ์ QR — ${editable?'สามารถเพิ่ม/แก้ไข/ลบได้':'โหมดดูอย่างเดียว'}</p></div>
       ${editable&&currentLabId!=='ALL'?`<button class="btn btn-primary" id="btnAddFromTable">+ เพิ่มเครื่อง UPS</button>`:''}
     </div>
     ${scoped.some(a=>a.notes&&a.notes.includes('นำเข้าจากภาพ'))?`<div class="callout">⚠️ <b>มีข้อมูลที่นำเข้าจากภาพถ่ายเอกสาร</b> — กรุณาเปิดแก้ไขแต่ละแถวเพื่อตรวจทานกับเอกสารต้นฉบับก่อนใช้งานจริง</div>`:''}
@@ -726,10 +767,10 @@ function viewAssets(){
         </tr></thead>
         <tbody>
           ${scoped.map(a=>{const rowEdit=canEditLab(a.lab_id); return `
-            <tr>
+            <tr class="row-clickable" data-row-id="${a.id}" title="คลิกเพื่อดูรายละเอียดเครื่อง">
               <td><input type="checkbox" class="rowChk" data-id="${a.id}" ${selectedIds.has(a.id)?'checked':''}></td>
               <td><div class="qr-thumb" data-qr-thumb="${a.id}" data-showqr="${a.id}"></div></td>
-              <td class="mono">${a.asset_id}</td>
+              <td class="mono"><span class="asset-link">${a.asset_id}</span></td>
               ${showLabCol?`<td>${escapeHtml(getLab(a.lab_id)?.name||a.lab_id)}</td>`:''}
               <td>${escapeHtml(a.floor)}</td>
               <td>${escapeHtml(a.location)}</td>
@@ -953,6 +994,35 @@ function dataGuideSection(title, rows){
       </div>
     </div>`;
 }
+const ACTIVITY_ICON={
+  login:'🔑', asset_create:'➕', asset_edit:'✏️', asset_delete:'🗑️',
+  ticket_create:'🚨', ticket_close:'✅', tech_entry:'🔧', alert_ack:'👁️', alert_progress:'🛠️'
+};
+function viewActivityLog(){
+  const scoped=getScopedActivity().slice().sort((a,b)=> new Date(b.timestamp||0)-new Date(a.timestamp||0));
+  const showLabCol=currentLabId==='ALL';
+  const rows=scoped.slice(0,200);
+  return `
+    <div class="page-head"><div><h2>📜 ประวัติการใช้งาน</h2><p>บันทึกว่าใครทำอะไรกับระบบบ้าง (ชื่อเป็นข้อความที่ผู้ใช้งานพิมพ์เองตอนล็อกอิน/แจ้งซ่อม ไม่ใช่การยืนยันตัวตน) ${rows.length<scoped.length?`— แสดง ${rows.length} รายการล่าสุดจากทั้งหมด ${scoped.length}`:''}</p></div></div>
+    <div class="table-wrap">
+      ${rows.length?`
+      <table>
+        <thead><tr><th>เวลา</th><th>ผู้ดำเนินการ</th>${showLabCol?'<th>ห้องปฏิบัติการ</th>':''}<th>การกระทำ</th><th>รายละเอียด</th></tr></thead>
+        <tbody>
+          ${rows.map(x=>`<tr>
+            <td class="mono">${fmtDateTime(x.timestamp)}</td>
+            <td>${escapeHtml(x.actor_name)||'<span class="helptext">ไม่ระบุ</span>'}</td>
+            ${showLabCol?`<td>${escapeHtml(getLab(x.lab_id)?.name||x.lab_id||'')}</td>`:''}
+            <td>${ACTIVITY_ICON[x.action_type]||'📝'} ${escapeHtml(x.asset_id)||''}</td>
+            <td>${escapeHtml(x.description)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`:`<div class="empty-state"><div class="big">📜</div>ยังไม่มีประวัติการใช้งาน</div>`}
+    </div>
+    <div class="callout blue" style="margin-top:16px;">
+      <b>ข้อควรทราบ:</b> ชื่อที่แสดงเป็นข้อความที่ผู้ใช้งานพิมพ์เองตอนล็อกอินหรือแจ้งซ่อม/กรอกผลงาน — ใช้ช่วยติดตามงานภายในทีมได้ แต่ไม่ใช่การยืนยันตัวตนที่ปลอมแปลงไม่ได้ (ระบบยังไม่มีบัญชีผู้ใช้รายคนจริง)
+    </div>`;
+}
 function viewDataGuide(){
   return `
     <div class="page-head"><div><h2>📋 วิธีกรอกข้อมูลเครื่อง UPS</h2><p>อธิบายความหมายของแต่ละช่องในฟอร์มเพิ่ม/แก้ไขเครื่อง พร้อมหน่วยและตัวอย่างที่ควรกรอก — เรียงตามลำดับหมวดในฟอร์มจริง</p></div></div>
@@ -1107,7 +1177,8 @@ function openLoginModal(){
   document.getElementById('modalBody').innerHTML=`
     <h3>เข้าสู่ระบบผู้ดูแล</h3>
     <p class="modal-sub">กรอกรหัสผ่านผู้ดูแลระบบรวม หรือรหัสผ่านผู้ดูแลของห้องปฏิบัติการของคุณ</p>
-    <div class="form-field"><label>รหัสผ่าน</label><input type="password" id="f_login_pw" autofocus></div>
+    <div class="form-field"><label>ชื่อผู้ใช้งาน *</label><input type="text" id="f_login_name" placeholder="ชื่อ-นามสกุล" autofocus></div>
+    <div class="form-field" style="margin-top:10px;"><label>รหัสผ่าน</label><input type="password" id="f_login_pw"></div>
     <p class="helptext" id="loginError" style="color:var(--red);"></p>
     <div class="modal-foot">
       <button class="btn" id="btnCancelLogin">ยกเลิก</button>
@@ -1121,15 +1192,19 @@ function openLoginModal(){
   document.getElementById('btnDoLogin').onclick=doLogin;
 }
 async function doLogin(){
+  const name=document.getElementById('f_login_name').value.trim();
   const pw=document.getElementById('f_login_pw').value;
+  if(!name){ document.getElementById('loginError').textContent='กรุณากรอกชื่อผู้ใช้งาน'; return; }
   if(!pw) return;
   const hash=await sha256(pw);
   if(hash===settings.masterPasswordHash){
-    session={role:'master'}; saveSession(); closeModal(); render(); toast('เข้าสู่ระบบในฐานะผู้ดูแลระบบรวมแล้ว'); return;
+    session={role:'master', actor_name:name}; saveSession(); closeModal(); render(); toast('เข้าสู่ระบบในฐานะผู้ดูแลระบบรวมแล้ว');
+    logActivity('login', `${name} เข้าสู่ระบบ (ผู้ดูแลระบบรวม)`); return;
   }
   const lab=labs.find(l=>l.passwordHash===hash);
   if(lab){
-    session={role:'lab',labId:lab.id}; saveSession(); currentLabId=lab.id; saveCurrentLab(); closeModal(); render(); toast(`เข้าสู่ระบบผู้ดูแล: ${lab.name}`); return;
+    session={role:'lab',labId:lab.id, actor_name:name}; saveSession(); currentLabId=lab.id; saveCurrentLab(); closeModal(); render(); toast(`เข้าสู่ระบบผู้ดูแล: ${lab.name}`);
+    logActivity('login', `${name} เข้าสู่ระบบ (ผู้ดูแล ${lab.name})`, {labId:lab.id}); return;
   }
   document.getElementById('loginError').textContent='รหัสผ่านไม่ถูกต้อง';
 }
@@ -1554,7 +1629,8 @@ function saveAssetFromModal(id){
       'เรียนผู้เกี่ยวข้อง', '',
       'มีการอัปเดตข้อมูลต่อไปนี้ในระบบทะเบียน UPS:',
       `Asset ID: ${assetIdVal}`,
-      `ห้องปฏิบัติการ: ${lab?.name||labIdVal}`, '',
+      `ห้องปฏิบัติการ: ${lab?.name||labIdVal}`,
+      `ดำเนินการโดย: ${session.actor_name || (session.role==='master'?'ผู้ดูแลระบบรวม':'ผู้ดูแลห้อง')}`, '',
       ...doneLines, '',
       'ไม่ต้องดำเนินการเพิ่มเติม ระบบจะไม่ส่งอีเมลแจ้งเตือนซ้ำจนกว่าจะใกล้ครบกำหนดรอบถัดไป',
       'ขอบคุณครับ/ค่ะ'
@@ -1575,9 +1651,11 @@ async function saveAssetToFirestore(id, assetIdVal, data){
         await db.collection(FS.assets).doc(id).update(data);
       }
       toast('บันทึกการแก้ไขเรียบร้อย');
+      logActivity('asset_edit', `แก้ไขข้อมูลเครื่อง ${assetIdVal}`, {assetId:assetIdVal, labId:data.lab_id});
     } else {
       await db.collection(FS.assets).doc(assetIdVal).set({ acknowledge_status:'Pending', acknowledge_timestamp:null, ...data });
       toast('เพิ่มเครื่อง UPS เรียบร้อย');
+      logActivity('asset_create', `เพิ่มเครื่อง ${assetIdVal} เข้าทะเบียน`, {assetId:assetIdVal, labId:data.lab_id});
     }
     closeModal();
   }catch(e){ console.error(e); toast('บันทึกไม่สำเร็จ — ตรวจสอบการเชื่อมต่อฐานข้อมูล'); }
@@ -1657,6 +1735,7 @@ async function submitIssueReport(a){
       pdf_name:'', pdf_data:'', pdf_link:'', last_reminder_sent:null
     });
     closeModal();
+    logActivity('ticket_create', `แจ้งซ่อมด่วน ${a.asset_id}: ${reason}`, {assetId:a.asset_id, labId:a.lab_id, actorName:reporterName});
     const lab=getLab(a.lab_id);
     const to=getNotifyRecipients(a, lab);
     if(to.length){
@@ -1705,6 +1784,7 @@ function openTechEntryForm(a){
   document.getElementById('modalBody').innerHTML=`
     <h3>กรอกผลการดำเนินงาน — ${a.asset_id}</h3>
     <p class="modal-sub">${escapeHtml(a.location)||''}${openTicket?` · อ้างอิงรายการแจ้งซ่อม: ${escapeHtml(openTicket.reason)}`:' · บันทึกผลงานบำรุงรักษาทั่วไป (ไม่ผูกกับรายการแจ้งซ่อม)'}</p>
+    <div class="form-field full"><label>ชื่อผู้ดำเนินการ *</label><input type="text" id="f_tech_name" placeholder="ชื่อ-นามสกุล ช่าง/ผู้ดำเนินการ"></div>
     <div class="form-section-title">ประเภทงานที่ดำเนินการ</div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;">
       <label style="display:flex;align-items:center;gap:6px;font-size:13.5px;"><input type="checkbox" id="f_tech_battery"> เปลี่ยนแบตเตอรี่</label>
@@ -1739,7 +1819,9 @@ function fileToBase64(file){
   });
 }
 async function submitTechEntry(a, openTicket){
+  const techName=document.getElementById('f_tech_name').value.trim();
   const notes=document.getElementById('f_tech_notes').value.trim();
+  if(!techName){ document.getElementById('techEntryError').textContent='กรุณากรอกชื่อผู้ดำเนินการ'; return; }
   if(!notes){ document.getElementById('techEntryError').textContent='กรุณากรอกรายละเอียดผลการดำเนินงาน'; return; }
   const actionTypes=[];
   if(document.getElementById('f_tech_battery').checked) actionTypes.push('battery');
@@ -1759,16 +1841,17 @@ async function submitTechEntry(a, openTicket){
   try{
     if(openTicket){
       await db.collection(FS.tickets).doc(openTicket.id).update({
-        status:'เสร็จสิ้น', technician_notes:notes, action_types:actionTypes,
+        status:'เสร็จสิ้น', technician_notes:notes, action_types:actionTypes, completed_by:techName,
         completed_at:new Date().toISOString(), pdf_data:pdfData, pdf_name:pdfName, pdf_link:pdfLink
       });
     } else {
       await db.collection(FS.tickets).add({
         asset_id:a.asset_id, lab_id:a.lab_id, reason:'(บันทึกผลงานโดยช่าง ไม่ผ่านการแจ้งซ่อม)',
-        status:'เสร็จสิ้น', reported_at:new Date().toISOString(), completed_at:new Date().toISOString(),
+        status:'เสร็จสิ้น', reported_at:new Date().toISOString(), completed_at:new Date().toISOString(), completed_by:techName,
         technician_notes:notes, action_types:actionTypes, pdf_data:pdfData, pdf_name:pdfName, pdf_link:pdfLink
       });
     }
+    logActivity('tech_entry', `${techName} กรอกผลดำเนินงาน ${a.asset_id}: ${actionTypes.map(actionTypeLabel).join(', ')||'-'}`, {assetId:a.asset_id, labId:a.lab_id, actorName:techName});
     if(actionTypes.includes('battery')){
       await db.collection(FS.assets).doc(a.id).update({
         last_battery_date: actionDate,
@@ -1798,7 +1881,8 @@ async function submitTechEntry(a, openTicket){
       `ดำเนินการเสร็จสิ้นสำหรับเครื่อง UPS ต่อไปนี้:`,
       `Asset ID: ${a.asset_id}`,
       `ห้องปฏิบัติการ: ${lab?.name||a.lab_id}`,
-      `ตำแหน่ง: ${a.location}`, '',
+      `ตำแหน่ง: ${a.location}`,
+      `ดำเนินการโดย: ${techName}`, '',
       ...doneLines, '',
       `รายละเอียด: ${notes}`, '',
       'ไม่ต้องดำเนินการเพิ่มเติม ระบบจะไม่ส่งอีเมลแจ้งเตือนซ้ำสำหรับรายการนี้อีกจนกว่าจะใกล้ครบกำหนดรอบถัดไป',
@@ -1892,10 +1976,15 @@ function afterRender(){
         selectedIds.delete(a.id);
         if(selectedAssetId===a.id) selectedAssetId=null;
         toast('ลบเครื่องเรียบร้อย');
+        logActivity('asset_delete', `ลบเครื่อง ${a.asset_id} ออกจากทะเบียน`, {assetId:a.asset_id, labId:a.lab_id});
       }catch(e){ toast('ลบไม่สำเร็จ'); }
     }
   }));
   document.querySelectorAll('[data-view-in-table]').forEach(el=>el.addEventListener('click',()=>{ currentView='assets'; render(); }));
+  document.querySelectorAll('tr[data-row-id]').forEach(tr=>tr.addEventListener('click',(e)=>{
+    if(e.target.closest('button,input,a,select,.qr-thumb')) return;
+    openAssetDetailModal(tr.dataset.rowId);
+  }));
   document.querySelectorAll('[data-showqr]').forEach(el=>el.addEventListener('click',()=>openQrModal(el.dataset.showqr)));
   document.querySelectorAll('[data-report-issue]').forEach(el=>el.addEventListener('click',()=>openReportIssueModal(el.dataset.reportIssue)));
   document.querySelectorAll('[data-tech-entry]').forEach(el=>el.addEventListener('click',()=>openTechCodePrompt(el.dataset.techEntry)));
@@ -1905,6 +1994,8 @@ function afterRender(){
     try{
       await db.collection(FS.tickets).doc(t.id).update({status:'เสร็จสิ้น', completed_at:new Date().toISOString()});
       toast('ปิดงานแจ้งซ่อมแล้ว');
+      const closerName = session.actor_name || (session.role==='master'?'ผู้ดูแลระบบรวม':'ผู้ดูแลห้อง');
+      logActivity('ticket_close', `ปิดงานแจ้งซ่อม ${t.asset_id} (${t.reason||''})`, {assetId:t.asset_id, labId:t.lab_id});
       const asset=assets.find(a=>a.asset_id===t.asset_id);
       const lab=getLab(t.lab_id);
       const recipients=asset?getNotifyRecipients(asset, lab):(lab?.contact_email?[lab.contact_email]:[]);
@@ -1914,7 +2005,8 @@ function afterRender(){
         `Asset ID: ${t.asset_id}`,
         `ห้องปฏิบัติการ: ${lab?.name||t.lab_id}`,
         `แจ้งโดย: ${t.reporter_name||'ไม่ระบุ'}`,
-        `อาการ/เหตุผลที่แจ้ง: ${t.reason||'-'}`, '',
+        `อาการ/เหตุผลที่แจ้ง: ${t.reason||'-'}`,
+        `ปิดงานโดย: ${closerName}`, '',
         'ไม่ต้องดำเนินการเพิ่มเติม ระบบจะหยุดส่งอีเมลแจ้งเตือนซ้ำสำหรับรายการนี้',
         'ขอบคุณครับ/ค่ะ'
       ]);
@@ -1935,6 +2027,7 @@ function afterRender(){
     try{
       await db.collection(FS.assets).doc(a.id).update({ acknowledge_status:'Acknowledged', acknowledge_timestamp:new Date().toISOString() });
       toast('บันทึกการรับทราบและเวลาแล้ว');
+      logActivity('alert_ack', `รับทราบแจ้งเตือนของเครื่อง ${a.asset_id}`, {assetId:a.asset_id, labId:a.lab_id});
     }catch(e){ toast('บันทึกไม่สำเร็จ'); }
   }));
   document.querySelectorAll('[data-start-progress]').forEach(el=>el.addEventListener('click', async ()=>{
@@ -1943,6 +2036,7 @@ function afterRender(){
     try{
       await db.collection(FS.assets).doc(a.id).update({ acknowledge_status:'InProgress', acknowledge_timestamp:new Date().toISOString() });
       toast('ตั้งสถานะเป็น "กำลังดำเนินงาน" แล้ว');
+      logActivity('alert_progress', `เริ่มดำเนินงานแจ้งเตือนของเครื่อง ${a.asset_id}`, {assetId:a.asset_id, labId:a.lab_id});
     }catch(e){ toast('บันทึกไม่สำเร็จ'); }
   }));
 
