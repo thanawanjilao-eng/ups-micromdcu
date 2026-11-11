@@ -403,7 +403,7 @@ async function logActivity(action_type, description, opts={}){
       actor_name, role:session.role||'public',
       lab_id: opts.labId || (session.role==='lab'?session.labId:null) || null,
       asset_id: opts.assetId || null,
-      action_type, description
+      action_type, description, changes: opts.changes||[]
     });
   }catch(e){ console.error('logActivity failed', e); }
 }
@@ -473,16 +473,6 @@ function fmtDateTime(d){ if(!d) return '—'; const dt=new Date(d); return dt.to
 function getNotifyRecipients(a, lab){
   const list=[lab?.contact_email, a.responsible_email, a.contract_contact_email].filter(Boolean);
   return [...new Set(list.map(e=>e.trim()).filter(Boolean))];
-}
-/* Opens a "job closed" email draft (mailto) to the same recipients that
-   would have gotten the reminder — so people know the issue is resolved
-   without having to check the app themselves. Fires on a short delay so
-   it doesn't fight with any toast/UI update happening in the same tick. */
-function sendClosureMailto(recipients, subject, bodyLines){
-  if(!recipients.length) return;
-  const body=encodeURIComponent(bodyLines.join('\n'));
-  const subj=encodeURIComponent(subject);
-  setTimeout(()=>{ window.location.href=`mailto:${recipients.join(',')}?subject=${subj}&body=${body}`; }, 300);
 }
 
 function maChecklistStats(a){
@@ -996,7 +986,9 @@ function dataGuideSection(title, rows){
 }
 const ACTIVITY_ICON={
   login:'🔑', asset_create:'➕', asset_edit:'✏️', asset_delete:'🗑️',
-  ticket_create:'🚨', ticket_close:'✅', tech_entry:'🔧', alert_ack:'👁️', alert_progress:'🛠️'
+  ticket_create:'🚨', ticket_close:'✅', ticket_delete:'🗑️', tech_entry:'🔧', alert_ack:'👁️', alert_progress:'🛠️',
+  asset_move:'📍', lab_edit:'🏷️', lab_create:'➕', lab_delete:'🗑️', password_change:'🔐', settings_edit:'⚙️',
+  map_edit:'🗺️', data_import:'⬆️', data_reset:'🧹'
 };
 function viewActivityLog(){
   const scoped=getScopedActivity().slice().sort((a,b)=> new Date(b.timestamp||0)-new Date(a.timestamp||0));
@@ -1014,7 +1006,7 @@ function viewActivityLog(){
             <td>${escapeHtml(x.actor_name)||'<span class="helptext">ไม่ระบุ</span>'}</td>
             ${showLabCol?`<td>${escapeHtml(getLab(x.lab_id)?.name||x.lab_id||'')}</td>`:''}
             <td>${ACTIVITY_ICON[x.action_type]||'📝'} ${escapeHtml(x.asset_id)||''}</td>
-            <td>${escapeHtml(x.description)}</td>
+            <td style="white-space:normal;min-width:260px;">${escapeHtml(x.description)}${(x.changes&&x.changes.length)?`<ul style="margin:4px 0 0;padding-right:18px;font-size:12px;color:var(--ink-soft);line-height:1.6;">${x.changes.map(c=>`<li>${escapeHtml(c)}</li>`).join('')}</ul>`:''}</td>
           </tr>`).join('')}
         </tbody>
       </table>`:`<div class="empty-state"><div class="big">📜</div>ยังไม่มีประวัติการใช้งาน</div>`}
@@ -1618,26 +1610,10 @@ function saveAssetFromModal(id){
     data.acknowledge_status='Pending';
     data.acknowledge_timestamp=null;
   }
-  saveAssetToFirestore(id, assetIdVal, data);
-  if(batteryChanged || maChanged){
-    const lab=getLab(labIdVal);
-    const recipients=getNotifyRecipients(data, lab);
-    const doneLines=[];
-    if(batteryChanged) doneLines.push(`- เปลี่ยนแบตเตอรี่แล้ว (วันที่ ${fmtDate(data.last_battery_date)}) กำหนดครั้งต่อไป ${fmtDate(nextBatteryDue(data))}`);
-    if(maChanged) doneLines.push(`- ทำ MA แล้ว (วันที่ ${fmtDate(data.last_ma_date)}) กำหนดครั้งต่อไป ${fmtDate(nextMaDue(data))}`);
-    sendClosureMailto(recipients, `✅ [ปิดงานแล้ว] ${assetIdVal}`, [
-      'เรียนผู้เกี่ยวข้อง', '',
-      'มีการอัปเดตข้อมูลต่อไปนี้ในระบบทะเบียน UPS:',
-      `Asset ID: ${assetIdVal}`,
-      `ห้องปฏิบัติการ: ${lab?.name||labIdVal}`,
-      `ดำเนินการโดย: ${session.actor_name || (session.role==='master'?'ผู้ดูแลระบบรวม':'ผู้ดูแลห้อง')}`, '',
-      ...doneLines, '',
-      'ไม่ต้องดำเนินการเพิ่มเติม ระบบจะไม่ส่งอีเมลแจ้งเตือนซ้ำจนกว่าจะใกล้ครบกำหนดรอบถัดไป',
-      'ขอบคุณครับ/ค่ะ'
-    ]);
-  }
+  const changeLines = original ? diffAsset(original, data) : [];
+  saveAssetToFirestore(id, assetIdVal, data, changeLines);
 }
-async function saveAssetToFirestore(id, assetIdVal, data){
+async function saveAssetToFirestore(id, assetIdVal, data, changeLines=[]){
   try{
     if(id){
       if(assetIdVal!==id){
@@ -1651,14 +1627,47 @@ async function saveAssetToFirestore(id, assetIdVal, data){
         await db.collection(FS.assets).doc(id).update(data);
       }
       toast('บันทึกการแก้ไขเรียบร้อย');
-      logActivity('asset_edit', `แก้ไขข้อมูลเครื่อง ${assetIdVal}`, {assetId:assetIdVal, labId:data.lab_id});
+      if(changeLines.length) logActivity('asset_edit', `แก้ไขข้อมูลเครื่อง ${assetIdVal} (${changeLines.length} รายการ)`, {assetId:assetIdVal, labId:data.lab_id, changes:changeLines});
     } else {
       await db.collection(FS.assets).doc(assetIdVal).set({ acknowledge_status:'Pending', acknowledge_timestamp:null, ...data });
       toast('เพิ่มเครื่อง UPS เรียบร้อย');
-      logActivity('asset_create', `เพิ่มเครื่อง ${assetIdVal} เข้าทะเบียน`, {assetId:assetIdVal, labId:data.lab_id});
+      logActivity('asset_create', `เพิ่มเครื่อง ${assetIdVal} เข้าทะเบียน`, {assetId:assetIdVal, labId:data.lab_id, changes:[`ห้องปฏิบัติการ: ${getLab(data.lab_id)?.name||data.lab_id}`, `สถานที่: ${data.location||'(ว่าง)'}`, `ยี่ห้อ: ${data.brand||'(ว่าง)'}`, `หมายเลขเครื่อง: ${data.serial_number||'(ว่าง)'}`]});
     }
     closeModal();
   }catch(e){ console.error(e); toast('บันทึกไม่สำเร็จ — ตรวจสอบการเชื่อมต่อฐานข้อมูล'); }
+}
+const ASSET_FIELD_LABELS={
+  asset_id:'Asset ID', lab_id:'ห้องปฏิบัติการ', floor:'ชั้น', location:'สถานที่', load_va:'โหลดจ่ายใช้งาน', brand:'ยี่ห้อ',
+  ups_rating:'Rating', serial_number:'หมายเลขเครื่อง', contract:'สัญญา', contract_company:'บริษัท',
+  contract_contact_name:'ผู้รับผิดชอบ (บริษัท)', contract_contact_email:'Email ผู้รับผิดชอบ (บริษัท)',
+  install_year_text:'ปีที่ติดตั้ง', duration_years:'ระยะเวลาใช้งาน', estimated_lifespan:'ประมาณอายุใช้งาน',
+  battery_size:'ขนาดแบต', battery_qty:'จำนวนแบต', risk_status:'สถานะความเสี่ยง',
+  last_battery_date:'เปลี่ยนแบตล่าสุด', next_battery_date:'เปลี่ยนแบตครั้งต่อไป',
+  last_ma_date:'ทำ MA ล่าสุด', next_ma_date:'MA ครั้งต่อไป',
+  responsible_name:'ชื่อผู้รับผิดชอบ', responsible_email:'อีเมลผู้รับผิดชอบ', x:'ตำแหน่ง X', y:'ตำแหน่ง Y', notes:'หมายเหตุ'
+};
+function fmtLogVal(k,v){
+  if(v===null||v===undefined||v==='') return '(ว่าง)';
+  if(k==='risk_status') return RISK_LABEL[v]||v;
+  if(k==='lab_id') return getLab(v)?.name||v;
+  const s=String(v);
+  return s.length>70 ? s.slice(0,70)+'…' : s;
+}
+/** Human-readable list of what changed between the saved asset and the form values. */
+function diffAsset(oldA, newData){
+  const lines=[];
+  Object.keys(ASSET_FIELD_LABELS).forEach(k=>{
+    const o=oldA[k]??'', n=newData[k]??'';
+    if(String(o)!==String(n)) lines.push(`${ASSET_FIELD_LABELS[k]}: ${fmtLogVal(k,o)} → ${fmtLogVal(k,n)}`);
+  });
+  const RES={pass:'ผ่าน',fail:'ไม่ผ่าน','':'ยังไม่ตรวจ'};
+  MA_CHECKLIST_ITEMS.forEach(item=>{
+    const o=oldA.ma_checklist?.[item.id]||{result:'',reason:''}, n=newData.ma_checklist?.[item.id]||{result:'',reason:''};
+    if((o.result||'')!==(n.result||'') || (o.reason||'')!==(n.reason||'')){
+      lines.push(`Checklist MA "${item.label.slice(0,28)}…": ${RES[o.result||'']} → ${RES[n.result||'']}${n.reason?` (${n.reason.slice(0,40)})`:''}`);
+    }
+  });
+  return lines;
 }
 function clamp(n,min,max){ return Math.max(min,Math.min(max,n)); }
 
@@ -1851,7 +1860,12 @@ async function submitTechEntry(a, openTicket){
         technician_notes:notes, action_types:actionTypes, pdf_data:pdfData, pdf_name:pdfName, pdf_link:pdfLink
       });
     }
-    logActivity('tech_entry', `${techName} กรอกผลดำเนินงาน ${a.asset_id}: ${actionTypes.map(actionTypeLabel).join(', ')||'-'}`, {assetId:a.asset_id, labId:a.lab_id, actorName:techName});
+    const techChanges=[`ประเภทงาน: ${actionTypes.map(actionTypeLabel).join(', ')||'-'}`, `วันที่ดำเนินการ: ${actionDate}`, `รายละเอียด: ${notes.length>90?notes.slice(0,90)+'…':notes}`];
+    if(openTicket) techChanges.push(`ปิดงานแจ้งซ่อม: ${openTicket.reason||'-'} (แจ้งโดย ${openTicket.reporter_name||'ไม่ระบุ'})`);
+    if(actionTypes.includes('battery')) techChanges.push(`เปลี่ยนแบตล่าสุด: ${fmtLogVal('last_battery_date',a.last_battery_date)} → ${actionDate} · ครั้งต่อไป → ${addYearsISO(actionDate,2)}`);
+    if(actionTypes.includes('ma')) techChanges.push(`ทำ MA ล่าสุด: ${fmtLogVal('last_ma_date',a.last_ma_date)} → ${actionDate} · ครั้งต่อไป → ${addMonthsISO(actionDate,4)}`);
+    if(pdfName||pdfLink) techChanges.push(`แนบเอกสาร: ${pdfName||pdfLink}`);
+    logActivity('tech_entry', `${techName} กรอกผลดำเนินงาน ${a.asset_id}`, {assetId:a.asset_id, labId:a.lab_id, actorName:techName, changes:techChanges});
     if(actionTypes.includes('battery')){
       await db.collection(FS.assets).doc(a.id).update({
         last_battery_date: actionDate,
@@ -1868,26 +1882,6 @@ async function submitTechEntry(a, openTicket){
     }
     closeModal();
     toast('บันทึกผลการดำเนินงานเรียบร้อย ขอบคุณครับ/ค่ะ');
-
-    const lab=getLab(a.lab_id);
-    const recipients=getNotifyRecipients(a, lab);
-    const doneLines=[];
-    if(actionTypes.includes('battery')) doneLines.push(`- เปลี่ยนแบตเตอรี่แล้ว (วันที่ ${fmtDate(actionDate)}) กำหนดครั้งต่อไป ${fmtDate(addYearsISO(actionDate,2))}`);
-    if(actionTypes.includes('ma')) doneLines.push(`- ทำ MA แล้ว (วันที่ ${fmtDate(actionDate)}) กำหนดครั้งต่อไป ${fmtDate(addMonthsISO(actionDate,4))}`);
-    if(actionTypes.includes('repair')) doneLines.push(`- ซ่อมแซมเรียบร้อย (วันที่ ${fmtDate(actionDate)})`);
-    if(openTicket) doneLines.push(`- ปิดงานแจ้งซ่อม: "${openTicket.reason}" (แจ้งโดย ${openTicket.reporter_name||'ไม่ระบุ'})`);
-    sendClosureMailto(recipients, `✅ [ปิดงานแล้ว] ${a.asset_id}`, [
-      'เรียนผู้เกี่ยวข้อง', '',
-      `ดำเนินการเสร็จสิ้นสำหรับเครื่อง UPS ต่อไปนี้:`,
-      `Asset ID: ${a.asset_id}`,
-      `ห้องปฏิบัติการ: ${lab?.name||a.lab_id}`,
-      `ตำแหน่ง: ${a.location}`,
-      `ดำเนินการโดย: ${techName}`, '',
-      ...doneLines, '',
-      `รายละเอียด: ${notes}`, '',
-      'ไม่ต้องดำเนินการเพิ่มเติม ระบบจะไม่ส่งอีเมลแจ้งเตือนซ้ำสำหรับรายการนี้อีกจนกว่าจะใกล้ครบกำหนดรอบถัดไป',
-      'ขอบคุณครับ/ค่ะ'
-    ]);
   }catch(e){ console.error(e); toast('บันทึกไม่สำเร็จ — ตรวจสอบการเชื่อมต่อฐานข้อมูล'); }
 }
 
@@ -1962,7 +1956,12 @@ function afterRender(){
     const contact_name = nameInput ? nameInput.value.trim() : lab.contact_name;
     const contact_phone = phoneInput ? phoneInput.value.trim() : lab.contact_phone;
     const contact_email = emailInput ? emailInput.value.trim() : lab.contact_email;
-    try{ await db.collection(FS.labs).doc(labId).update({contact_name, contact_phone, contact_email}); toast('บันทึกผู้รับผิดชอบห้องแล้ว'); }
+    try{
+      const ch=[]; const mk=(l,o,n)=>{ if((o||'')!==(n||'')) ch.push(`${l}: ${o||'(ว่าง)'} → ${n||'(ว่าง)'}`); };
+      mk('ชื่อผู้รับผิดชอบ',lab.contact_name,contact_name); mk('เบอร์ติดต่อ',lab.contact_phone,contact_phone); mk('อีเมล',lab.contact_email,contact_email);
+      await db.collection(FS.labs).doc(labId).update({contact_name, contact_phone, contact_email}); toast('บันทึกผู้รับผิดชอบห้องแล้ว');
+      if(ch.length) logActivity('lab_edit', `แก้ไขข้อมูลผู้รับผิดชอบห้อง ${lab.name}`, {labId, changes:ch});
+    }
     catch(e){ toast('บันทึกไม่สำเร็จ'); }
   }));
 
@@ -1994,22 +1993,7 @@ function afterRender(){
     try{
       await db.collection(FS.tickets).doc(t.id).update({status:'เสร็จสิ้น', completed_at:new Date().toISOString()});
       toast('ปิดงานแจ้งซ่อมแล้ว');
-      const closerName = session.actor_name || (session.role==='master'?'ผู้ดูแลระบบรวม':'ผู้ดูแลห้อง');
-      logActivity('ticket_close', `ปิดงานแจ้งซ่อม ${t.asset_id} (${t.reason||''})`, {assetId:t.asset_id, labId:t.lab_id});
-      const asset=assets.find(a=>a.asset_id===t.asset_id);
-      const lab=getLab(t.lab_id);
-      const recipients=asset?getNotifyRecipients(asset, lab):(lab?.contact_email?[lab.contact_email]:[]);
-      sendClosureMailto(recipients, `✅ [ปิดงานแล้ว] แจ้งซ่อม — ${t.asset_id}`, [
-        'เรียนผู้เกี่ยวข้อง', '',
-        `รายการแจ้งซ่อมด่วนสำหรับเครื่อง UPS ต่อไปนี้ได้รับการแก้ไขเรียบร้อยแล้ว:`,
-        `Asset ID: ${t.asset_id}`,
-        `ห้องปฏิบัติการ: ${lab?.name||t.lab_id}`,
-        `แจ้งโดย: ${t.reporter_name||'ไม่ระบุ'}`,
-        `อาการ/เหตุผลที่แจ้ง: ${t.reason||'-'}`,
-        `ปิดงานโดย: ${closerName}`, '',
-        'ไม่ต้องดำเนินการเพิ่มเติม ระบบจะหยุดส่งอีเมลแจ้งเตือนซ้ำสำหรับรายการนี้',
-        'ขอบคุณครับ/ค่ะ'
-      ]);
+      logActivity('ticket_close', `ปิดงานแจ้งซ่อม ${t.asset_id}`, {assetId:t.asset_id, labId:t.lab_id, changes:[`อาการที่แจ้ง: ${t.reason||'-'}`, `แจ้งโดย: ${t.reporter_name||'ไม่ระบุ'}`, 'สถานะ: รอดำเนินการ → เสร็จสิ้น']});
     }
     catch(e){ toast('บันทึกไม่สำเร็จ'); }
   }));
@@ -2017,7 +2001,7 @@ function afterRender(){
     const t=tickets.find(x=>x.id===el.dataset.delTicket);
     if(!t||!canEditLab(t.lab_id)){ toast('คุณไม่มีสิทธิ์ลบรายการนี้'); return; }
     if(confirm('ยืนยันการลบรายการแจ้งซ่อมนี้?')){
-      try{ await db.collection(FS.tickets).doc(t.id).delete(); toast('ลบรายการแล้ว'); }
+      try{ await db.collection(FS.tickets).doc(t.id).delete(); toast('ลบรายการแล้ว'); logActivity('ticket_delete', `ลบรายการแจ้งซ่อม ${t.asset_id}`, {assetId:t.asset_id, labId:t.lab_id, changes:[`อาการที่แจ้ง: ${t.reason||'-'}`, `สถานะตอนลบ: ${t.status}`]}); }
       catch(e){ toast('ลบไม่สำเร็จ'); }
     }
   }));
@@ -2064,23 +2048,24 @@ function afterRender(){
       if(dataUrl.length>900000){ toast('ไฟล์ภาพยังใหญ่เกินไปแม้ย่อแล้ว กรุณาเลือกภาพที่มีรายละเอียดน้อยกว่านี้'); return; }
       await db.collection(FS.mapBgs).doc(currentLabId).set({dataUrl, name:file.name});
       toast('อัปโหลดผังห้องเรียบร้อย');
+      logActivity('map_edit', `อัปโหลดผังห้อง ${getLab(currentLabId)?.name||''}`, {labId:currentLabId, changes:[`ไฟล์: ${file.name}`]});
     }catch(err){ console.error(err); toast('อัปโหลดไม่สำเร็จ'); }
   });
   document.getElementById('btnClearMap')?.addEventListener('click', async ()=>{
-    try{ await db.collection(FS.mapBgs).doc(currentLabId).delete(); toast('ลบผังห้องแล้ว'); }
+    try{ await db.collection(FS.mapBgs).doc(currentLabId).delete(); toast('ลบผังห้องแล้ว'); logActivity('map_edit', `ลบผังห้อง ${getLab(currentLabId)?.name||''}`, {labId:currentLabId}); }
     catch(e){ toast('ลบไม่สำเร็จ'); }
   });
 
   document.getElementById('btnSaveLabPw')?.addEventListener('click', async ()=>{
     const pw=document.getElementById('f_lab_pw').value;
     if(!pw||pw.length<4){ toast('กรุณาตั้งรหัสผ่านอย่างน้อย 4 ตัวอักษร'); return; }
-    try{ await db.collection(FS.labs).doc(currentLabId).update({passwordHash: await sha256(pw)}); toast('เปลี่ยนรหัสผ่านห้องนี้แล้ว'); }
+    try{ await db.collection(FS.labs).doc(currentLabId).update({passwordHash: await sha256(pw)}); toast('เปลี่ยนรหัสผ่านห้องนี้แล้ว'); logActivity('password_change', `เปลี่ยนรหัสผ่านผู้ดูแลห้อง ${getLab(currentLabId)?.name||''}`, {labId:currentLabId}); }
     catch(e){ toast('บันทึกไม่สำเร็จ'); }
   });
   document.getElementById('btnSaveTechCode')?.addEventListener('click', async ()=>{
     const code=document.getElementById('f_tech_code_new').value;
     if(!code||code.length<4){ toast('กรุณาตั้งรหัสอย่างน้อย 4 ตัวอักษร'); return; }
-    try{ await db.collection(FS.labs).doc(currentLabId).update({technicianCodeHash: await sha256(code)}); toast('บันทึกรหัสช่างแล้ว'); }
+    try{ await db.collection(FS.labs).doc(currentLabId).update({technicianCodeHash: await sha256(code)}); toast('บันทึกรหัสช่างแล้ว'); logActivity('password_change', `เปลี่ยนรหัสช่างของห้อง ${getLab(currentLabId)?.name||''}`, {labId:currentLabId}); }
     catch(e){ toast('บันทึกไม่สำเร็จ'); }
   });
 
@@ -2116,6 +2101,7 @@ function afterRender(){
         });
         await batch.commit();
         selectedIds.clear(); toast('นำเข้าข้อมูลห้องนี้เรียบร้อย');
+        logActivity('data_import', `นำเข้าข้อมูลทะเบียนห้อง ${getLab(currentLabId)?.name||''} จากไฟล์สำรอง`, {labId:currentLabId, changes:[`แทนที่ข้อมูลเดิมด้วย ${parsed.assets.length} เครื่อง`]});
       }catch(err){ console.error(err); toast('ไม่สามารถอ่านไฟล์ได้'); }
     };
     reader.readAsText(file);
@@ -2128,30 +2114,31 @@ function afterRender(){
         snap.forEach(d=>batch.delete(d.ref));
         await batch.commit();
         selectedAssetId=null; selectedIds.clear(); toast('ล้างข้อมูลห้องนี้แล้ว');
+        logActivity('data_reset', `ล้างข้อมูลเครื่อง UPS ทั้งหมดของห้อง ${getLab(currentLabId)?.name||''}`, {labId:currentLabId, changes:[`ลบ ${snap.size??snap.docs.length} เครื่อง`]});
       }catch(e){ toast('ล้างข้อมูลไม่สำเร็จ'); }
     }
   });
 
   // Settings: master-only
   document.getElementById('btnSaveQrBase')?.addEventListener('click', async ()=>{
-    try{ await db.collection(FS.settings).doc(SETTINGS_DOC_ID).set({qrBaseUrl:document.getElementById('f_qr_base').value.trim()},{merge:true}); toast('บันทึก URL สำหรับ QR แล้ว'); }
+    try{ await db.collection(FS.settings).doc(SETTINGS_DOC_ID).set({qrBaseUrl:document.getElementById('f_qr_base').value.trim()},{merge:true}); toast('บันทึก URL สำหรับ QR แล้ว'); logActivity('settings_edit', 'แก้ไข URL สำหรับ QR Code', {changes:[`${settings.qrBaseUrl||'(ว่าง)'} → ${document.getElementById('f_qr_base').value.trim()||'(ว่าง)'}`]}); }
     catch(e){ toast('บันทึกไม่สำเร็จ'); }
   });
   document.getElementById('btnSaveMasterPw')?.addEventListener('click', async ()=>{
     const pw=document.getElementById('f_master_pw').value;
     if(!pw||pw.length<4){ toast('กรุณาตั้งรหัสผ่านอย่างน้อย 4 ตัวอักษร'); return; }
-    try{ await db.collection(FS.settings).doc(SETTINGS_DOC_ID).set({masterPasswordHash: await sha256(pw)},{merge:true}); toast('เปลี่ยนรหัสผ่านผู้ดูแลระบบรวมแล้ว'); }
+    try{ await db.collection(FS.settings).doc(SETTINGS_DOC_ID).set({masterPasswordHash: await sha256(pw)},{merge:true}); toast('เปลี่ยนรหัสผ่านผู้ดูแลระบบรวมแล้ว'); logActivity('password_change', 'เปลี่ยนรหัสผ่านผู้ดูแลระบบรวม'); }
     catch(e){ toast('บันทึกไม่สำเร็จ'); }
   });
   document.querySelectorAll('[data-save-lab]').forEach(btn=>btn.addEventListener('click', async ()=>{
     const labId=btn.dataset.saveLab;
     const newName=document.querySelector(`[data-lab-name="${labId}"]`).value.trim();
     const newPw=document.querySelector(`[data-lab-newpw="${labId}"]`).value;
-    const updates={};
-    if(newName) updates.name=newName;
-    if(newPw){ if(newPw.length<4){ toast('รหัสผ่านต้องมีอย่างน้อย 4 ตัวอักษร'); return; } updates.passwordHash=await sha256(newPw); }
+    const updates={}; const labBefore=getLab(labId); const labCh=[];
+    if(newName){ updates.name=newName; if(labBefore && labBefore.name!==newName) labCh.push(`ชื่อห้อง: ${labBefore.name} → ${newName}`); }
+    if(newPw){ if(newPw.length<4){ toast('รหัสผ่านต้องมีอย่างน้อย 4 ตัวอักษร'); return; } updates.passwordHash=await sha256(newPw); labCh.push('เปลี่ยนรหัสผ่านผู้ดูแลห้อง (ไม่บันทึกตัวรหัส)'); }
     if(!Object.keys(updates).length) return;
-    try{ await db.collection(FS.labs).doc(labId).update(updates); toast('บันทึกข้อมูลห้องแล้ว'); }
+    try{ await db.collection(FS.labs).doc(labId).update(updates); toast('บันทึกข้อมูลห้องแล้ว'); if(labCh.length) logActivity('lab_edit', `แก้ไขข้อมูลห้อง ${labBefore?.name||labId}`, {labId, changes:labCh}); }
     catch(e){ toast('บันทึกไม่สำเร็จ'); }
   }));
   document.querySelectorAll('[data-del-lab]').forEach(btn=>btn.addEventListener('click', async ()=>{
@@ -2167,13 +2154,15 @@ function afterRender(){
       await batch.commit();
       if(currentLabId===labId){ currentLabId=labs.find(l=>l.id!==labId)?.id||null; saveCurrentLab(); }
       toast('ลบห้องปฏิบัติการแล้ว');
+      logActivity('lab_delete', `ลบห้องปฏิบัติการ ${lab.name}`, {labId, changes:[`ลบเครื่อง UPS ในห้องนี้ ${count} เครื่อง`]});
     }catch(e){ toast('ลบไม่สำเร็จ'); }
   }));
   document.getElementById('btnAddLab')?.addEventListener('click', async ()=>{
     const name=document.getElementById('f_new_lab_name').value.trim();
     if(!name){ toast('กรุณาระบุชื่อห้องปฏิบัติการ'); return; }
-    await addNewLab(name);
+    const newLab=await addNewLab(name);
     toast('เพิ่มห้องปฏิบัติการแล้ว (รหัสผ่านเริ่มต้น: lab-2569)');
+    logActivity('lab_create', `เพิ่มห้องปฏิบัติการ ${name}`, {labId:newLab.id});
   });
 
   renderQrThumbnails();
@@ -2195,7 +2184,10 @@ function startDrag(e,pin,asset){
     if(asset._pendingX!==undefined){
       const nx=Math.round(asset._pendingX), ny=Math.round(asset._pendingY);
       delete asset._pendingX; delete asset._pendingY;
-      db.collection(FS.assets).doc(asset.id).update({x:nx, y:ny}).catch(()=>toast('บันทึกตำแหน่งไม่สำเร็จ'));
+      const ox=asset.x, oy=asset.y;
+      db.collection(FS.assets).doc(asset.id).update({x:nx, y:ny}).then(()=>{
+        if(nx!==ox||ny!==oy) logActivity('asset_move', `ย้ายตำแหน่งหมุดเครื่อง ${asset.asset_id}`, {assetId:asset.asset_id, labId:asset.lab_id, changes:[`ตำแหน่ง: (${ox}, ${oy}) → (${nx}, ${ny})`]});
+      }).catch(()=>toast('บันทึกตำแหน่งไม่สำเร็จ'));
     }
     document.removeEventListener('mousemove',move); document.removeEventListener('mouseup',up);
     document.removeEventListener('touchmove',move); document.removeEventListener('touchend',up);
